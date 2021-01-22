@@ -11,6 +11,7 @@ import (
 	"sync"
 )
 
+// KVMap specifies storage backend interface
 type KVMap interface {
 	SetKey(key string, value []byte)
 	GetKey(key string) ([]byte, bool)
@@ -18,61 +19,76 @@ type KVMap interface {
 	Init()
 }
 
+// RaceKvMap is unsafe implementation without a proper locking.
 type RaceKvMap struct {
 	values map[string][]byte
 }
 
+// Init initializes the backend
 func (d *RaceKvMap) Init() {
 	(*d).values = make(map[string][]byte)
 }
 
+// SetKey stores a new key and associated value to the backend
 func (d *RaceKvMap) SetKey(key string, value []byte) {
 	(*d).values[key] = value
 }
 
+// GetKey returns a value or error (nil, false) for specified key
 func (d *RaceKvMap) GetKey(key string) ([]byte, bool) {
 	val, found := (*d).values[key]
 	return val, found
 }
+
+// GetKeyCount returns number of keys or -1 if counting keys is not supported
 func (d *RaceKvMap) GetKeyCount() int {
 	return len((*d).values)
 }
 
+// BasicKvMap implements a simple backend with a single shared RWMutex to coordinate concurrent writes and reads.
 type BasicKvMap struct {
 	values map[string][]byte
 	mutex  sync.RWMutex
 }
 
+// Init initializes the backend
 func (d *BasicKvMap) Init() {
 	(*d).values = make(map[string][]byte)
 }
 
+// SetKey stores a new key and associated value to the backend
 func (d *BasicKvMap) SetKey(key string, value []byte) {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
 	(*d).values[key] = value
 }
 
+// GetKey returns a value or error (nil, false) for specified key
 func (d *BasicKvMap) GetKey(key string) ([]byte, bool) {
 	d.mutex.RLock()
 	defer d.mutex.RUnlock()
 	val, found := (*d).values[key]
 	return val, found
 }
+
+// GetKeyCount returns number of keys or -1 if counting keys is not supported
 func (d *BasicKvMap) GetKeyCount() int {
 	d.mutex.RLock()
 	defer d.mutex.RUnlock()
 	return len((*d).values)
 }
 
+// SyncKvMap uses sync.Map which automatically handles concurrent access. sync.Map is append-only structure which does not perform well for repeating writes / delete/add/delete/add cycles.
 type SyncKvMap struct {
 	values sync.Map
 }
 
+// Init initializes the backend
 func (d *SyncKvMap) Init() {
 	(*d).values = sync.Map{}
 }
 
+// GetKey returns a value or error (nil, false) for specified key
 func (d *SyncKvMap) GetKey(key string) ([]byte, bool) {
 	val, ok := (*d).values.Load(key)
 	if ok {
@@ -80,13 +96,18 @@ func (d *SyncKvMap) GetKey(key string) ([]byte, bool) {
 	}
 	return nil, ok
 }
+
+// SetKey stores a new key and associated value to the backend
 func (d *SyncKvMap) SetKey(key string, value []byte) {
 	(*d).values.Store(key, value)
 }
+
+// GetKeyCount returns number of keys or -1 if counting keys is not supported
 func (d *SyncKvMap) GetKeyCount() int {
 	return -1
 }
 
+// ShardedKvMap implements a backend with separate locks for different shards. Sharded locking should reduce lock contention on a busy database, especially if some keys are extremely busy and keys in different shards are occasionally accessed.
 type ShardedKvMap struct {
 	values  map[uint8]map[string][]byte
 	mutexes []sync.RWMutex
@@ -100,6 +121,7 @@ func getShard(key string) uint8 {
 	return uint8(s % 16)
 }
 
+// Init initializes the backend
 func (d *ShardedKvMap) Init() {
 	(*d).mutexes = make([]sync.RWMutex, 16)
 	(*d).values = make(map[uint8]map[string][]byte)
@@ -109,6 +131,7 @@ func (d *ShardedKvMap) Init() {
 	}
 }
 
+// GetKey returns a value or error (nil, false) for specified key
 func (d *ShardedKvMap) GetKey(key string) ([]byte, bool) {
 	shard := getShard(key)
 	(*d).mutexes[shard].RLock()
@@ -117,6 +140,7 @@ func (d *ShardedKvMap) GetKey(key string) ([]byte, bool) {
 	return val, found
 }
 
+// SetKey stores a new key and associated value to the backend
 func (d *ShardedKvMap) SetKey(key string, value []byte) {
 	shard := getShard(key)
 	(*d).mutexes[shard].Lock()
@@ -124,6 +148,7 @@ func (d *ShardedKvMap) SetKey(key string, value []byte) {
 	(*d).values[shard][key] = value
 }
 
+// GetKeyCount returns number of keys or -1 if counting keys is not supported
 func (d *ShardedKvMap) GetKeyCount() int {
 	var i uint8
 	var a int
@@ -135,6 +160,7 @@ func (d *ShardedKvMap) GetKeyCount() int {
 	return a
 }
 
+// FileBackedStorage uses files directly to store all the data. This is highly inefficient but very durable.
 type FileBackedStorage struct {
 	mutex         sync.RWMutex
 	dataDirectory string
@@ -146,6 +172,7 @@ func getHashedFilename(key string) string {
 	return fmt.Sprintf("%x.kvdata", hasher.Sum(nil))
 }
 
+// Init initializes the backend
 func (d *FileBackedStorage) Init() {
 	path := os.Getenv("DATA_DIRECTORY")
 	if path == "" {
@@ -166,6 +193,7 @@ func (d *FileBackedStorage) Init() {
 	(*d).dataDirectory = path
 }
 
+// GetKey returns a value or error (nil, false) for specified key
 func (d *FileBackedStorage) GetKey(key string) ([]byte, bool) {
 	filename := (*d).dataDirectory + "/" + getHashedFilename(key)
 	(*d).mutex.RLock()
@@ -177,6 +205,7 @@ func (d *FileBackedStorage) GetKey(key string) ([]byte, bool) {
 	return data, true
 }
 
+// SetKey stores a new key and associated value to the backend
 func (d *FileBackedStorage) SetKey(key string, value []byte) {
 	filename := (*d).dataDirectory + "/" + getHashedFilename(key)
 	(*d).mutex.Lock()
@@ -184,6 +213,7 @@ func (d *FileBackedStorage) SetKey(key string, value []byte) {
 	ioutil.WriteFile(filename, value, 0600)
 }
 
+// GetKeyCount returns number of keys or -1 if counting keys is not supported
 func (d *FileBackedStorage) GetKeyCount() int {
 	files, err := ioutil.ReadDir((*d).dataDirectory)
 	if err != nil {
@@ -203,6 +233,7 @@ type outFile struct {
 	Value []byte
 }
 
+// CachedFileBackedStorage keeps all the data in-memory but also asynchronously stores everything in files. When calling Init, all existing keys are loaded from the filesystem.
 type CachedFileBackedStorage struct {
 	values          map[string][]byte
 	valuesMutex     sync.RWMutex
@@ -210,6 +241,7 @@ type CachedFileBackedStorage struct {
 	dataDirectory   string
 }
 
+// Init initializes the backend
 func (d *CachedFileBackedStorage) Init() {
 	d.values = make(map[string][]byte)
 	d.writeoutChannel = make(chan outFile, 1000)
@@ -252,6 +284,7 @@ func (d *CachedFileBackedStorage) Init() {
 	}()
 }
 
+// GetKey returns a value or error (nil, false) for specified key
 func (d *CachedFileBackedStorage) GetKey(key string) ([]byte, bool) {
 	keyHash := getHashedFilename(key)
 	d.valuesMutex.RLock()
@@ -260,6 +293,7 @@ func (d *CachedFileBackedStorage) GetKey(key string) ([]byte, bool) {
 	return val, found
 }
 
+// SetKey stores a new key and associated value to the backend
 func (d *CachedFileBackedStorage) SetKey(key string, value []byte) {
 	keyHash := getHashedFilename(key)
 	d.valuesMutex.Lock()
@@ -268,6 +302,7 @@ func (d *CachedFileBackedStorage) SetKey(key string, value []byte) {
 	d.writeoutChannel <- outFile{Key: keyHash, Value: value}
 }
 
+// GetKeyCount returns number of keys or -1 if counting keys is not supported
 func (d *CachedFileBackedStorage) GetKeyCount() int {
 	d.valuesMutex.RLock()
 	defer d.valuesMutex.RUnlock()
