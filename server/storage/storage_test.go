@@ -124,3 +124,52 @@ func TestCachedFileStorageBackend(t *testing.T) {
 		t.Error("A new file backed storage did not load old data")
 	}
 }
+
+func TestGetDataDir(t *testing.T) {
+	os.Unsetenv("DATA_DIRECTORY")
+	dd := getDataDir()
+	if dd != "datadir" {
+		t.Error("getDataDir returned incorrect dir")
+	}
+	os.Setenv("DATA_DIRECTORY", "/tmp/foo/")
+	dd = getDataDir()
+	if dd != "/tmp/foo" {
+		t.Error("getDataDir returned incorrect dir")
+	}
+}
+
+func TestFileBackedStorageGetKeyCount(t *testing.T) {
+	// Normal operations alredy tested in normal tests -> test non-existing dir
+	hasher := sha256.New()
+	hasher.Write([]byte(string(time.Now().String())))
+	dataDirectory := fmt.Sprintf("%x", hasher.Sum(nil))
+	os.Setenv("DATA_DIRECTORY", dataDirectory)
+	kvmap := &FileBackedStorage{}
+	kvmap.Init()
+	err := os.RemoveAll(dataDirectory)
+	if err != nil {
+		t.Errorf("Removing data dir failed with %s", err)
+	}
+	keyCount := kvmap.GetKeyCount()
+	if keyCount != -1 {
+		t.Error("keycount did not fail with -1")
+	}
+}
+
+func TestCachedFileBackedStorageGetKeyCount(t *testing.T) {
+	// Normal operations alredy tested in normal tests -> test non-existing dir
+	hasher := sha256.New()
+	hasher.Write([]byte(string(time.Now().String())))
+	dataDirectory := fmt.Sprintf("%x", hasher.Sum(nil))
+	os.Setenv("DATA_DIRECTORY", dataDirectory)
+	kvmap := &CachedFileBackedStorage{}
+	kvmap.Init()
+	err := os.RemoveAll(dataDirectory)
+	if err != nil {
+		t.Errorf("Removing data dir failed with %s", err)
+	}
+	keyCount := kvmap.GetKeyCount()
+	if keyCount != 0 {
+		t.Error("keycount did not fail with 0")
+	}
+}

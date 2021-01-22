@@ -11,6 +11,17 @@ import (
 	"sync"
 )
 
+func getDataDir() string {
+	path := os.Getenv("DATA_DIRECTORY")
+	if path == "" {
+		path = "datadir"
+	}
+	if strings.HasSuffix(path, "/") {
+		path = strings.TrimRight(path, "/")
+	}
+	return path
+}
+
 // KVMap specifies storage backend interface
 type KVMap interface {
 	SetKey(key string, value []byte)
@@ -174,13 +185,7 @@ func getHashedFilename(key string) string {
 
 // Init initializes the backend
 func (d *FileBackedStorage) Init() {
-	path := os.Getenv("DATA_DIRECTORY")
-	if path == "" {
-		path = "datadir"
-	}
-	if strings.HasSuffix(path, "/") {
-		path = strings.TrimRight(path, "/")
-	}
+	path := getDataDir()
 	_, err := os.Stat(path)
 	if err != nil {
 		_ = os.Mkdir(path, os.ModeDir|0700)
@@ -245,13 +250,7 @@ type CachedFileBackedStorage struct {
 func (d *CachedFileBackedStorage) Init() {
 	d.values = make(map[string][]byte)
 	d.writeoutChannel = make(chan outFile, 1000)
-	path := os.Getenv("DATA_DIRECTORY")
-	if path == "" {
-		path = "datadir"
-	}
-	if strings.HasSuffix(path, "/") {
-		path = strings.TrimRight(path, "/")
-	}
+	path := getDataDir()
 	_, err := os.Stat(path)
 	if err != nil {
 		_ = os.Mkdir(path, os.ModeDir|0700)
