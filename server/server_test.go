@@ -152,14 +152,14 @@ func TestStatsCommand(t *testing.T) {
 	client, _ := net.Pipe()
 	go func() {
 		incomingChannel := <-dataContainer.StatsRequestChannel
-		incomingChannel <- "your stats"
+		incomingChannel <- " your stats"
 	}()
 	var r response
 	r = statsCommand(client, "", &dataContainer)
 	if r.StatusCode != 200 {
 		t.Errorf("stats returned incorrect status code %d", r.StatusCode)
 	}
-	if r.Text != "your stats" {
+	if r.Text != "stats your stats" {
 		t.Errorf("stats did not return our dummy data: %s", r.Text)
 	}
 }
