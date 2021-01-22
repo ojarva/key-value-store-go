@@ -229,6 +229,10 @@ func getKvMap(mapName string) (storage.KVMap, error) {
 		return &storage.SyncKvMap{}, nil
 	case "race":
 		return &storage.RaceKvMap{}, nil
+	case "filebacked":
+		return &storage.FileBackedStorage{}, nil
+	case "cachefilebacked":
+		return &storage.CachedFileBackedStorage{}, nil
 	default:
 		return nil, errors.New("Invalid map name")
 	}

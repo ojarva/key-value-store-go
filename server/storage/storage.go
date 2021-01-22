@@ -1,6 +1,15 @@
 package storage
 
-import "sync"
+import (
+	"crypto/sha256"
+	"fmt"
+	"io/ioutil"
+	"log"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+)
 
 type KVMap interface {
 	SetKey(key string, value []byte)
@@ -124,4 +133,143 @@ func (d *ShardedKvMap) GetKeyCount() int {
 		(*d).mutexes[i].RUnlock()
 	}
 	return a
+}
+
+type FileBackedStorage struct {
+	mutex         sync.RWMutex
+	dataDirectory string
+}
+
+func getHashedFilename(key string) string {
+	hasher := sha256.New()
+	hasher.Write([]byte(key))
+	return fmt.Sprintf("%x.kvdata", hasher.Sum(nil))
+}
+
+func (d *FileBackedStorage) Init() {
+	path := os.Getenv("DATA_DIRECTORY")
+	if path == "" {
+		path = "datadir"
+	}
+	if strings.HasSuffix(path, "/") {
+		path = strings.TrimRight(path, "/")
+	}
+	_, err := os.Stat(path)
+	if err != nil {
+		_ = os.Mkdir(path, os.ModeDir|0700)
+	}
+	fileInfo, err := os.Stat(path)
+	if !fileInfo.IsDir() {
+		log.Fatalf("%s is not a directory", path)
+		os.Exit(6)
+	}
+	(*d).dataDirectory = path
+}
+
+func (d *FileBackedStorage) GetKey(key string) ([]byte, bool) {
+	filename := (*d).dataDirectory + "/" + getHashedFilename(key)
+	(*d).mutex.RLock()
+	defer (*d).mutex.RUnlock()
+	data, err := ioutil.ReadFile(filename)
+	if err != nil {
+		return nil, false
+	}
+	return data, true
+}
+
+func (d *FileBackedStorage) SetKey(key string, value []byte) {
+	filename := (*d).dataDirectory + "/" + getHashedFilename(key)
+	(*d).mutex.Lock()
+	defer (*d).mutex.Unlock()
+	ioutil.WriteFile(filename, value, 0600)
+}
+
+func (d *FileBackedStorage) GetKeyCount() int {
+	files, err := ioutil.ReadDir((*d).dataDirectory)
+	if err != nil {
+		return -1
+	}
+	count := 0
+	for _, item := range files {
+		if strings.HasSuffix(item.Name(), ".kvdata") {
+			count++
+		}
+	}
+	return count
+}
+
+type outFile struct {
+	Key   string
+	Value []byte
+}
+
+type CachedFileBackedStorage struct {
+	values          map[string][]byte
+	valuesMutex     sync.RWMutex
+	writeoutChannel chan outFile
+	dataDirectory   string
+}
+
+func (d *CachedFileBackedStorage) Init() {
+	d.values = make(map[string][]byte)
+	d.writeoutChannel = make(chan outFile, 1000)
+	path := os.Getenv("DATA_DIRECTORY")
+	if path == "" {
+		path = "datadir"
+	}
+	if strings.HasSuffix(path, "/") {
+		path = strings.TrimRight(path, "/")
+	}
+	_, err := os.Stat(path)
+	if err != nil {
+		_ = os.Mkdir(path, os.ModeDir|0700)
+	}
+	fileInfo, err := os.Stat(path)
+	if !fileInfo.IsDir() {
+		log.Fatalf("%s is not a directory", path)
+		os.Exit(6)
+	}
+	d.dataDirectory = path
+	d.valuesMutex.Lock()
+	defer d.valuesMutex.Unlock()
+	files, _ := filepath.Glob(d.dataDirectory + "/*.kvdata")
+	for _, filename := range files {
+		contents, err := ioutil.ReadFile(filename)
+		if err != nil {
+			log.Fatalf("Unable to read file %s: %s", filename, err)
+			os.Exit(6)
+		}
+		fileParts := strings.Split(filename, "/")
+		fileHash := fileParts[len(fileParts)-1]
+		d.values[fileHash] = contents
+	}
+	go func() {
+		var of outFile
+		for of = range d.writeoutChannel {
+			filename := d.dataDirectory + "/" + of.Key
+			ioutil.WriteFile(filename, of.Value, 0600)
+		}
+	}()
+}
+
+func (d *CachedFileBackedStorage) GetKey(key string) ([]byte, bool) {
+	keyHash := getHashedFilename(key)
+	d.valuesMutex.RLock()
+	defer d.valuesMutex.RUnlock()
+	val, found := d.values[keyHash]
+	return val, found
+}
+
+func (d *CachedFileBackedStorage) SetKey(key string, value []byte) {
+	keyHash := getHashedFilename(key)
+	d.valuesMutex.Lock()
+	d.values[keyHash] = value
+	d.valuesMutex.Unlock()
+	d.writeoutChannel <- outFile{Key: keyHash, Value: value}
+}
+
+func (d *CachedFileBackedStorage) GetKeyCount() int {
+	d.valuesMutex.RLock()
+	defer d.valuesMutex.RUnlock()
+	return len((*d).values)
 }
