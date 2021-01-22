@@ -71,16 +71,10 @@ func main() {
 	}
 	wg.Wait()
 	endTime := time.Now()
+	close(timeChan)
 	var totalCommandTime int64
-	running := true
-	for running {
-		select {
-		case cmdTime := <-timeChan:
-			totalCommandTime = totalCommandTime + cmdTime
-		case <-time.After(1 * time.Second):
-			running = false
-			break
-		}
+	for cmdTime := range timeChan {
+		totalCommandTime = totalCommandTime + cmdTime
 	}
 
 	fmt.Printf("Running %d threads took %dms\n", *threadCountFlag, (endTime.UnixNano()-startTime.UnixNano())/int64(time.Millisecond))
