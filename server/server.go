@@ -268,12 +268,13 @@ func initialize(port int, ip string, mapName string, generalTimeout string, writ
 
 func run(dataContainer *dataContainer, addr *net.TCPAddr) error {
 	var wg sync.WaitGroup
-	go statsCollector(dataContainer.StatsChannel, dataContainer.StatsRequestChannel, dataContainer.StatsResetChannel, &wg)
-
 	l, err := net.ListenTCP("tcp4", addr)
 	if err != nil {
 		return err
 	}
+
+	go statsCollector(dataContainer.StatsChannel, dataContainer.StatsRequestChannel, dataContainer.StatsResetChannel, &wg)
+
 	customLogger.Printf("Listening on %s:%d with %s for inactivity timeout and %s for write timeout", addr.IP, addr.Port, dataContainer.TimeoutSettings.GeneralTimeout, dataContainer.TimeoutSettings.WriteTimeout)
 	defer l.Close()
 
