@@ -2,7 +2,11 @@ package storage
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"fmt"
+	"os"
 	"testing"
+	"time"
 )
 
 func testBackend(kvmap KVMap, backendName string, t *testing.T) {
@@ -87,4 +91,36 @@ func TestRaceKvMap(t *testing.T) {
 func TestShardedKvMap(t *testing.T) {
 	kvmap := &ShardedKvMap{}
 	testBackend(kvmap, "sharded", t)
+}
+
+func TestFileStorageBackend(t *testing.T) {
+	kvmap := &FileBackedStorage{}
+	hasher := sha256.New()
+	hasher.Write([]byte(string(time.Now().String())))
+	dataDirectory := fmt.Sprintf("%x", hasher.Sum(nil))
+	os.Setenv("DATA_DIRECTORY", dataDirectory)
+	defer os.RemoveAll(dataDirectory)
+	testBackend(kvmap, "filebacked", t)
+	kvmap2 := &CachedFileBackedStorage{}
+	kvmap2.Init()
+	keyCount := kvmap.GetKeyCount()
+	if keyCount != 2 {
+		t.Error("A new file backed storage did not load old data")
+	}
+}
+
+func TestCachedFileStorageBackend(t *testing.T) {
+	kvmap := &CachedFileBackedStorage{}
+	hasher := sha256.New()
+	hasher.Write([]byte(string(time.Now().String())))
+	dataDirectory := fmt.Sprintf("%x", hasher.Sum(nil))
+	os.Setenv("DATA_DIRECTORY", dataDirectory)
+	defer os.RemoveAll(dataDirectory)
+	testBackend(kvmap, "filebacked", t)
+	kvmap2 := &CachedFileBackedStorage{}
+	kvmap2.Init()
+	keyCount := kvmap.GetKeyCount()
+	if keyCount != 2 {
+		t.Error("A new file backed storage did not load old data")
+	}
 }
