@@ -37,23 +37,23 @@ type RaceKvMap struct {
 
 // Init initializes the backend
 func (d *RaceKvMap) Init() {
-	(*d).values = make(map[string][]byte)
+	d.values = make(map[string][]byte)
 }
 
 // SetKey stores a new key and associated value to the backend
 func (d *RaceKvMap) SetKey(key string, value []byte) {
-	(*d).values[key] = value
+	d.values[key] = value
 }
 
 // GetKey returns a value or error (nil, false) for specified key
 func (d *RaceKvMap) GetKey(key string) ([]byte, bool) {
-	val, found := (*d).values[key]
+	val, found := d.values[key]
 	return val, found
 }
 
 // GetKeyCount returns number of keys or -1 if counting keys is not supported
 func (d *RaceKvMap) GetKeyCount() int {
-	return len((*d).values)
+	return len(d.values)
 }
 
 // BasicKvMap implements a simple backend with a single shared RWMutex to coordinate concurrent writes and reads.
@@ -64,21 +64,21 @@ type BasicKvMap struct {
 
 // Init initializes the backend
 func (d *BasicKvMap) Init() {
-	(*d).values = make(map[string][]byte)
+	d.values = make(map[string][]byte)
 }
 
 // SetKey stores a new key and associated value to the backend
 func (d *BasicKvMap) SetKey(key string, value []byte) {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
-	(*d).values[key] = value
+	d.values[key] = value
 }
 
 // GetKey returns a value or error (nil, false) for specified key
 func (d *BasicKvMap) GetKey(key string) ([]byte, bool) {
 	d.mutex.RLock()
 	defer d.mutex.RUnlock()
-	val, found := (*d).values[key]
+	val, found := d.values[key]
 	return val, found
 }
 
@@ -86,7 +86,7 @@ func (d *BasicKvMap) GetKey(key string) ([]byte, bool) {
 func (d *BasicKvMap) GetKeyCount() int {
 	d.mutex.RLock()
 	defer d.mutex.RUnlock()
-	return len((*d).values)
+	return len(d.values)
 }
 
 // SyncKvMap uses sync.Map which automatically handles concurrent access. sync.Map is append-only structure which does not perform well for repeating writes / delete/add/delete/add cycles.
@@ -96,12 +96,12 @@ type SyncKvMap struct {
 
 // Init initializes the backend
 func (d *SyncKvMap) Init() {
-	(*d).values = sync.Map{}
+	d.values = sync.Map{}
 }
 
 // GetKey returns a value or error (nil, false) for specified key
 func (d *SyncKvMap) GetKey(key string) ([]byte, bool) {
-	val, ok := (*d).values.Load(key)
+	val, ok := d.values.Load(key)
 	if ok {
 		return val.([]byte), ok
 	}
@@ -110,7 +110,7 @@ func (d *SyncKvMap) GetKey(key string) ([]byte, bool) {
 
 // SetKey stores a new key and associated value to the backend
 func (d *SyncKvMap) SetKey(key string, value []byte) {
-	(*d).values.Store(key, value)
+	d.values.Store(key, value)
 }
 
 // GetKeyCount returns number of keys or -1 if counting keys is not supported
@@ -134,29 +134,29 @@ func getShard(key string) uint8 {
 
 // Init initializes the backend
 func (d *ShardedKvMap) Init() {
-	(*d).mutexes = make([]sync.RWMutex, 16)
-	(*d).values = make(map[uint8]map[string][]byte)
+	d.mutexes = make([]sync.RWMutex, 16)
+	d.values = make(map[uint8]map[string][]byte)
 	var i uint8
 	for i = 0; i < 16; i++ {
-		(*d).values[i] = make(map[string][]byte)
+		d.values[i] = make(map[string][]byte)
 	}
 }
 
 // GetKey returns a value or error (nil, false) for specified key
 func (d *ShardedKvMap) GetKey(key string) ([]byte, bool) {
 	shard := getShard(key)
-	(*d).mutexes[shard].RLock()
-	defer (*d).mutexes[shard].RUnlock()
-	val, found := (*d).values[shard][key]
+	d.mutexes[shard].RLock()
+	defer d.mutexes[shard].RUnlock()
+	val, found := d.values[shard][key]
 	return val, found
 }
 
 // SetKey stores a new key and associated value to the backend
 func (d *ShardedKvMap) SetKey(key string, value []byte) {
 	shard := getShard(key)
-	(*d).mutexes[shard].Lock()
-	defer (*d).mutexes[shard].Unlock()
-	(*d).values[shard][key] = value
+	d.mutexes[shard].Lock()
+	defer d.mutexes[shard].Unlock()
+	d.values[shard][key] = value
 }
 
 // GetKeyCount returns number of keys or -1 if counting keys is not supported
@@ -164,9 +164,9 @@ func (d *ShardedKvMap) GetKeyCount() int {
 	var i uint8
 	var a int
 	for i = 0; i < 16; i++ {
-		(*d).mutexes[i].RLock()
-		a += len((*d).values[i])
-		(*d).mutexes[i].RUnlock()
+		d.mutexes[i].RLock()
+		a += len(d.values[i])
+		d.mutexes[i].RUnlock()
 	}
 	return a
 }
@@ -195,14 +195,14 @@ func (d *FileBackedStorage) Init() {
 		log.Fatalf("%s is not a directory", path)
 		os.Exit(6)
 	}
-	(*d).dataDirectory = path
+	d.dataDirectory = path
 }
 
 // GetKey returns a value or error (nil, false) for specified key
 func (d *FileBackedStorage) GetKey(key string) ([]byte, bool) {
-	filename := (*d).dataDirectory + "/" + getHashedFilename(key)
-	(*d).mutex.RLock()
-	defer (*d).mutex.RUnlock()
+	filename := d.dataDirectory + "/" + getHashedFilename(key)
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
 	data, err := ioutil.ReadFile(filename)
 	if err != nil {
 		return nil, false
@@ -212,15 +212,15 @@ func (d *FileBackedStorage) GetKey(key string) ([]byte, bool) {
 
 // SetKey stores a new key and associated value to the backend
 func (d *FileBackedStorage) SetKey(key string, value []byte) {
-	filename := (*d).dataDirectory + "/" + getHashedFilename(key)
-	(*d).mutex.Lock()
-	defer (*d).mutex.Unlock()
+	filename := d.dataDirectory + "/" + getHashedFilename(key)
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
 	ioutil.WriteFile(filename, value, 0600)
 }
 
 // GetKeyCount returns number of keys or -1 if counting keys is not supported
 func (d *FileBackedStorage) GetKeyCount() int {
-	files, err := ioutil.ReadDir((*d).dataDirectory)
+	files, err := ioutil.ReadDir(d.dataDirectory)
 	if err != nil {
 		return -1
 	}
@@ -305,5 +305,5 @@ func (d *CachedFileBackedStorage) SetKey(key string, value []byte) {
 func (d *CachedFileBackedStorage) GetKeyCount() int {
 	d.valuesMutex.RLock()
 	defer d.valuesMutex.RUnlock()
-	return len((*d).values)
+	return len(d.values)
 }
