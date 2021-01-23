@@ -45,6 +45,16 @@ func getCommand(c net.Conn, args string, dataContainer *dataContainer, connectio
 	return response{StatusCode: 200, Text: string(value)}
 }
 
+func deleteCommand(c net.Conn, args string, dataContainer *dataContainer, connectionContainer *connectionContainer) response {
+	parts := strings.Split(args, " ")
+	if len(parts) != 2 {
+		return response{StatusCode: 400, Text: "Invalid command. Delete expects one argument (key)"}
+	}
+	dataContainer.KeyValueMap.DeleteKey(parts[1])
+	dataContainer.ChangesChannel <- Command{Command: "delete", Key: parts[1]}
+	return response{StatusCode: 200, Text: "Deleted"}
+}
+
 func setCommand(c net.Conn, args string, dataContainer *dataContainer, connectionContainer *connectionContainer) response {
 	parts := strings.Split(args, " ")
 	if len(parts) != 3 {

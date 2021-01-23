@@ -71,8 +71,26 @@ func testBackend(kvmap KVMap, backendName string, t *testing.T) {
 	if bytes.Compare(returnedValue, newTestValue) != 0 {
 		t.Errorf("Backend %s returned %s for the original key after another key was added, expected %s", backendName, returnedValue, newTestValue)
 	}
+
 }
 
+func testDelete(kvmap KVMap, backendName string, t *testing.T) {
+	kvmap.Init()
+	var returnedValue []byte
+	var found bool
+	newTestValue := []byte("testvalue2")
+	kvmap.SetKey("testKey", newTestValue)
+	_, found = kvmap.GetKey("testKey")
+	if !found {
+		t.Errorf("kvmap %s init failed: setting key had no effect", backendName)
+	}
+	kvmap.DeleteKey("testKey")
+	returnedValue, found = kvmap.GetKey("testKey")
+	if found {
+		t.Errorf("Delete %s did not delete key: value is %s", backendName, returnedValue)
+	}
+	kvmap.DeleteKey("testkey")
+}
 func TestBasicKvMap(t *testing.T) {
 	kvmap := &BasicKvMap{}
 	testBackend(kvmap, "basic", t)
@@ -91,6 +109,26 @@ func TestRaceKvMap(t *testing.T) {
 func TestShardedKvMap(t *testing.T) {
 	kvmap := &ShardedKvMap{}
 	testBackend(kvmap, "sharded", t)
+}
+
+func TestBasicKvMapDelete(t *testing.T) {
+	kvmap := &BasicKvMap{}
+	testDelete(kvmap, "basic", t)
+}
+
+func TestSyncKvMapDelete(t *testing.T) {
+	kvmap := &SyncKvMap{}
+	testDelete(kvmap, "sync", t)
+}
+
+func TestRaceKvMapDelete(t *testing.T) {
+	kvmap := &RaceKvMap{}
+	testDelete(kvmap, "race", t)
+}
+
+func TestShardedKvMapDelete(t *testing.T) {
+	kvmap := &ShardedKvMap{}
+	testDelete(kvmap, "sharded", t)
 }
 
 func TestFileStorageBackend(t *testing.T) {
@@ -122,6 +160,38 @@ func TestCachedFileStorageBackend(t *testing.T) {
 	keyCount := kvmap.GetKeyCount()
 	if keyCount != 2 {
 		t.Error("A new file backed storage did not load old data")
+	}
+}
+
+func TestFileStorageBackendDelete(t *testing.T) {
+	kvmap := &FileBackedStorage{}
+	hasher := sha256.New()
+	hasher.Write([]byte(string(time.Now().String())))
+	dataDirectory := fmt.Sprintf("%x", hasher.Sum(nil))
+	os.Setenv("DATA_DIRECTORY", dataDirectory)
+	defer os.RemoveAll(dataDirectory)
+	testDelete(kvmap, "filebacked", t)
+	kvmap2 := &CachedFileBackedStorage{}
+	kvmap2.Init()
+	keyCount := kvmap.GetKeyCount()
+	if keyCount != 0 {
+		t.Error("A new file backed storage did load deleted data")
+	}
+}
+
+func TestCachedFileStorageBackendDelete(t *testing.T) {
+	kvmap := &CachedFileBackedStorage{}
+	hasher := sha256.New()
+	hasher.Write([]byte(string(time.Now().String())))
+	dataDirectory := fmt.Sprintf("%x", hasher.Sum(nil))
+	os.Setenv("DATA_DIRECTORY", dataDirectory)
+	defer os.RemoveAll(dataDirectory)
+	testDelete(kvmap, "filebacked", t)
+	kvmap2 := &CachedFileBackedStorage{}
+	kvmap2.Init()
+	keyCount := kvmap.GetKeyCount()
+	if keyCount != 0 {
+		t.Error("A new file backed storage did not load deleted data")
 	}
 }
 

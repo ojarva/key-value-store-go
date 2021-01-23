@@ -218,6 +218,33 @@ func TestResetCommand(t *testing.T) {
 	}
 }
 
+func TestDeleteCommand(t *testing.T) {
+	dataContainer := getDummyDataContainer()
+	connectionContainer := &connectionContainer{}
+	client, _ := net.Pipe()
+	var r response
+	r = deleteCommand(client, " asdf", &dataContainer, connectionContainer)
+	if r.StatusCode != 200 {
+		t.Errorf("delete returned incorrect status code: %d", r.StatusCode)
+	}
+	select {
+	case a := <-dataContainer.ChangesChannel:
+		if a.Command != "delete" {
+			t.Error("Delete command did not publish delete change")
+		}
+		if a.Key != "asdf" {
+			t.Error("delete command published incorrect key")
+		}
+	default:
+		t.Error("delete command did not publish a change")
+	}
+	r = deleteCommand(client, "", &dataContainer, connectionContainer)
+	if r.StatusCode != 400 {
+		t.Errorf("delete returned incorrect status code: %d", r.StatusCode)
+	}
+
+}
+
 func TestSetCommand(t *testing.T) {
 	dataContainer := getDummyDataContainer()
 	connectionContainer := &connectionContainer{}

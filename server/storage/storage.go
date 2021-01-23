@@ -24,10 +24,11 @@ func getDataDir() string {
 
 // KVMap specifies storage backend interface
 type KVMap interface {
-	SetKey(key string, value []byte)
+	DeleteKey(key string)
 	GetKey(key string) ([]byte, bool)
 	GetKeyCount() int
 	Init()
+	SetKey(key string, value []byte)
 }
 
 // RaceKvMap is unsafe implementation without a proper locking.
@@ -54,6 +55,11 @@ func (d *RaceKvMap) GetKey(key string) ([]byte, bool) {
 // GetKeyCount returns number of keys or -1 if counting keys is not supported
 func (d *RaceKvMap) GetKeyCount() int {
 	return len(d.values)
+}
+
+// DeleteKey removes key and associated value from storage
+func (d *RaceKvMap) DeleteKey(key string) {
+	delete(d.values, key)
 }
 
 // BasicKvMap implements a simple backend with a single shared RWMutex to coordinate concurrent writes and reads.
@@ -89,6 +95,13 @@ func (d *BasicKvMap) GetKeyCount() int {
 	return len(d.values)
 }
 
+// DeleteKey removes key and associated value from storage
+func (d *BasicKvMap) DeleteKey(key string) {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+	delete(d.values, key)
+}
+
 // SyncKvMap uses sync.Map which automatically handles concurrent access. sync.Map is append-only structure which does not perform well for repeating writes / delete/add/delete/add cycles.
 type SyncKvMap struct {
 	values sync.Map
@@ -116,6 +129,11 @@ func (d *SyncKvMap) SetKey(key string, value []byte) {
 // GetKeyCount returns number of keys or -1 if counting keys is not supported
 func (d *SyncKvMap) GetKeyCount() int {
 	return -1
+}
+
+// DeleteKey removes key and associated value from storage
+func (d *SyncKvMap) DeleteKey(key string) {
+	d.values.Delete(key)
 }
 
 // ShardedKvMap implements a backend with separate locks for different shards. Sharded locking should reduce lock contention on a busy database, especially if some keys are extremely busy and keys in different shards are occasionally accessed.
@@ -169,6 +187,14 @@ func (d *ShardedKvMap) GetKeyCount() int {
 		d.mutexes[i].RUnlock()
 	}
 	return a
+}
+
+// DeleteKey removes key and associated value from storage
+func (d *ShardedKvMap) DeleteKey(key string) {
+	shard := getShard(key)
+	d.mutexes[shard].Lock()
+	defer d.mutexes[shard].Unlock()
+	delete(d.values[shard], key)
 }
 
 // FileBackedStorage uses files directly to store all the data. This is highly inefficient but very durable.
@@ -233,9 +259,25 @@ func (d *FileBackedStorage) GetKeyCount() int {
 	return count
 }
 
+// DeleteKey removes key and associated value from storage
+func (d *FileBackedStorage) DeleteKey(key string) {
+	filename := d.dataDirectory + "/" + getHashedFilename(key)
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+	os.Remove(filename)
+}
+
+type FileSyncAction int
+
+const (
+	DeleteAction FileSyncAction = iota
+	SetAction
+)
+
 type outFile struct {
-	Key   string
-	Value []byte
+	Key    string
+	Value  []byte
+	Action FileSyncAction
 }
 
 // CachedFileBackedStorage keeps all the data in-memory but also asynchronously stores everything in files. When calling Init, all existing keys are loaded from the filesystem.
@@ -278,7 +320,12 @@ func (d *CachedFileBackedStorage) Init() {
 		var of outFile
 		for of = range d.writeoutChannel {
 			filename := d.dataDirectory + "/" + of.Key
-			ioutil.WriteFile(filename, of.Value, 0600)
+			switch of.Action {
+			case SetAction:
+				ioutil.WriteFile(filename, of.Value, 0600)
+			case DeleteAction:
+				os.Remove(filename)
+			}
 		}
 	}()
 }
@@ -298,7 +345,7 @@ func (d *CachedFileBackedStorage) SetKey(key string, value []byte) {
 	d.valuesMutex.Lock()
 	d.values[keyHash] = value
 	d.valuesMutex.Unlock()
-	d.writeoutChannel <- outFile{Key: keyHash, Value: value}
+	d.writeoutChannel <- outFile{Key: keyHash, Value: value, Action: SetAction}
 }
 
 // GetKeyCount returns number of keys or -1 if counting keys is not supported
@@ -306,4 +353,13 @@ func (d *CachedFileBackedStorage) GetKeyCount() int {
 	d.valuesMutex.RLock()
 	defer d.valuesMutex.RUnlock()
 	return len(d.values)
+}
+
+// DeleteKey removes key and associated value from storage
+func (d *CachedFileBackedStorage) DeleteKey(key string) {
+	keyHash := getHashedFilename(key)
+	d.valuesMutex.Lock()
+	delete(d.values, keyHash)
+	d.valuesMutex.Unlock()
+	d.writeoutChannel <- outFile{Key: keyHash, Value: nil, Action: DeleteAction}
 }
