@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"net"
 	"sync"
 	"testing"
@@ -253,6 +254,20 @@ func TestSetCommand(t *testing.T) {
 	r = setCommand(client, " asdf foo", &dataContainer, connectionContainer)
 	if r.StatusCode != 201 {
 		t.Errorf("set returned incorrect status code for invalid key: %d", r.StatusCode)
+	}
+	select {
+	case a := <-dataContainer.ChangesChannel:
+		if a.Command != "set" {
+			t.Error("set command did not publish set change")
+		}
+		if a.Key != "asdf" {
+			t.Error("set command published incorrect key")
+		}
+		if bytes.Compare(a.Value, []byte("foo")) != 0 {
+			t.Error("set command published incorrect value")
+		}
+	default:
+		t.Error("set command did not publish a change")
 	}
 	r = setCommand(client, " asdf", &dataContainer, connectionContainer)
 	if r.StatusCode != 400 {
