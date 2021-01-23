@@ -33,7 +33,7 @@ type response struct {
 	FinalCommand func()
 }
 
-func getCommand(c net.Conn, args string, dataContainer *dataContainer) response {
+func getCommand(c net.Conn, args string, dataContainer *dataContainer, connectionContainer *connectionContainer) response {
 	parts := strings.Split(args, " ")
 	if len(parts) != 2 {
 		return response{StatusCode: 400, Text: "Invalid command. get expects a single parameter (key)"}
@@ -45,49 +45,61 @@ func getCommand(c net.Conn, args string, dataContainer *dataContainer) response 
 	return response{StatusCode: 200, Text: string(value)}
 }
 
-func setCommand(c net.Conn, args string, dataContainer *dataContainer) response {
+func setCommand(c net.Conn, args string, dataContainer *dataContainer, connectionContainer *connectionContainer) response {
 	parts := strings.Split(args, " ")
 	if len(parts) != 3 {
 		return response{StatusCode: 400, Text: "Invalid command. Set expects at least two arguments (key and value)"}
 	}
 	// TODO: handle quoting
 	// TODO: don't convert from incoming bytes to strings and back to bytes
-	dataContainer.KeyValueMap.SetKey(parts[1], []byte(parts[2]))
+	value := []byte(parts[2])
+	dataContainer.KeyValueMap.SetKey(parts[1], value)
+	dataContainer.ChangesChannel <- Command{Command: "set", Key: parts[1], Value: value}
 	return response{StatusCode: 201, Text: "Created"}
 }
 
-func resetCommand(c net.Conn, args string, dataContainer *dataContainer) response {
+func resetCommand(c net.Conn, args string, dataContainer *dataContainer, connectionContainer *connectionContainer) response {
 	args = strings.Trim(args, " ")
 	switch args {
 	case "stats":
-		(*dataContainer).StatsResetChannel <- true
+		dataContainer.StatsResetChannel <- true
 		return response{StatusCode: 200, Text: "Stats reset"}
 	default:
 		return response{StatusCode: 400, Text: "Invalid command. Stats requires type to be reset"}
 	}
 }
 
-func pingCommand(c net.Conn, args string, dataContainer *dataContainer) response {
+func subscribeCommand(c net.Conn, args string, dataContainer *dataContainer, connectionContainer *connectionContainer) response {
+	dataContainer.SubscriptionChannel <- SubscriptionCommand{UnsubscribeSender: false, SenderID: connectionContainer.SenderID, SubscriptionChannel: connectionContainer.SubscriptionChannel}
+	return response{StatusCode: 200, Text: "Subscribed"}
+}
+
+func unsubscribeCommand(c net.Conn, args string, dataContainer *dataContainer, connectionContainer *connectionContainer) response {
+	dataContainer.SubscriptionChannel <- SubscriptionCommand{UnsubscribeSender: true, SenderID: connectionContainer.SenderID}
+	return response{StatusCode: 200, Text: "Unsubscribed"}
+}
+
+func pingCommand(c net.Conn, args string, dataContainer *dataContainer, connectionContainer *connectionContainer) response {
 	return response{StatusCode: 200, Text: "pong" + args}
 }
 
-func statsCommand(c net.Conn, args string, dataContainer *dataContainer) response {
+func statsCommand(c net.Conn, args string, dataContainer *dataContainer, connectionContainer *connectionContainer) response {
 	statsOutput := "stats"
 	connectionStatsChannel := make(chan string, 1)
-	(*dataContainer).StatsRequestChannel <- connectionStatsChannel
+	dataContainer.StatsRequestChannel <- connectionStatsChannel
 	statsOutput += <-connectionStatsChannel
 	return response{StatusCode: 200, Text: statsOutput}
 }
 
-func keyCountCommand(c net.Conn, args string, dataContainer *dataContainer) response {
-	keyCount := (*dataContainer).KeyValueMap.GetKeyCount()
+func keyCountCommand(c net.Conn, args string, dataContainer *dataContainer, connectionContainer *connectionContainer) response {
+	keyCount := dataContainer.KeyValueMap.GetKeyCount()
 	if keyCount == -1 {
 		return response{StatusCode: 501, Text: "Not implemented. Current store backend does not support key count"}
 	}
 	return response{StatusCode: 200, Text: fmt.Sprintf("keycount %d", keyCount)}
 }
 
-func quitCommand(c net.Conn, args string, dataContainer *dataContainer) response {
+func quitCommand(c net.Conn, args string, dataContainer *dataContainer, connectionContainer *connectionContainer) response {
 	closeFunc := func() {
 		c.Close()
 	}
@@ -95,8 +107,30 @@ func quitCommand(c net.Conn, args string, dataContainer *dataContainer) response
 }
 
 type commandParams struct {
-	Func func(net.Conn, string, *dataContainer) response
+	Func func(net.Conn, string, *dataContainer, *connectionContainer) response
 	Help string
+}
+
+type Command struct {
+	Command string
+	Key     string
+	Value   []byte
+}
+
+func (c *Command) Format() string {
+	if len(c.Key) > 0 {
+		if len(c.Value) > 0 {
+			return fmt.Sprintf("%s %s %s", c.Command, c.Key, c.Value)
+		}
+		return fmt.Sprintf("%s %s", c.Command, c.Key)
+	}
+	return c.Command
+}
+
+type SubscriptionCommand struct {
+	SubscriptionChannel chan Command
+	UnsubscribeSender   bool
+	SenderID            string
 }
 
 type commandMap map[string]*commandParams
@@ -109,10 +143,54 @@ type dataContainer struct {
 	StatsRequestChannel chan chan string
 	StatsResetChannel   chan bool
 	StatsChannel        chan statsPoint
+	SubscriptionChannel chan SubscriptionCommand
+	ChangesChannel      chan Command
+	SenderIDGenerator   func() string
 	TimeoutSettings     timeoutSettings
 }
 
-func handleIncomingCommand(c net.Conn, dataContainer *dataContainer, commandMap *commandMap, incoming string) response {
+type connectionContainer struct {
+	SenderID            string
+	SubscriptionChannel chan Command
+}
+
+func generateSenderID() func() string {
+	var seq int
+	var mutex sync.Mutex
+	return func() string {
+		mutex.Lock()
+		defer mutex.Unlock()
+		seq++
+		return fmt.Sprintf("%d", seq)
+	}
+}
+
+func subscriptionService(subscriptionChannel chan SubscriptionCommand, changesChannel chan Command) {
+	subscriptions := make(map[string]SubscriptionCommand)
+	for {
+		select {
+		case sc := <-subscriptionChannel:
+			if sc.UnsubscribeSender == true {
+				_, found := subscriptions[sc.SenderID]
+				if found {
+					delete(subscriptions, sc.SenderID)
+				}
+			} else {
+				_, found := subscriptions[sc.SenderID]
+				if found {
+					delete(subscriptions, sc.SenderID)
+				}
+				subscriptions[sc.SenderID] = sc
+			}
+		case c := <-changesChannel:
+			for _, subscriber := range subscriptions {
+				subscriber.SubscriptionChannel <- c
+			}
+		}
+	}
+}
+
+func handleIncomingCommand(c net.Conn, dataContainer *dataContainer, commandMap *commandMap, incoming string, connectionContainer *connectionContainer) response {
 	var command string
 	var args string
 	incoming = strings.TrimRight(incoming, "\n")
@@ -127,7 +205,7 @@ func handleIncomingCommand(c net.Conn, dataContainer *dataContainer, commandMap 
 	_, found := (*commandMap)[command]
 	var r response
 	if found {
-		r = (*commandMap)[command].Func(c, args, dataContainer)
+		r = (*commandMap)[command].Func(c, args, dataContainer, connectionContainer)
 		dataContainer.StatsChannel <- statsPoint{Status: r.StatusCode, Command: command}
 	} else {
 		r = response{StatusCode: 400, Text: "Invalid command."}
@@ -136,24 +214,40 @@ func handleIncomingCommand(c net.Conn, dataContainer *dataContainer, commandMap 
 }
 
 func handleConnection(c net.Conn, dataContainer *dataContainer) {
+	connectionContainer := &connectionContainer{
+		SenderID:            dataContainer.SenderIDGenerator(),
+		SubscriptionChannel: make(chan Command, 100),
+	}
 	connectionOpenTime := time.Now()
 	customLogger.Printf("Serving %s", c.RemoteAddr())
 	c.SetDeadline(time.Now().Add(dataContainer.TimeoutSettings.GeneralTimeout))
 	defer c.Close()
 	defer customLogger.Printf("Stopped serving %s. Connection opened at %s", c.RemoteAddr(), connectionOpenTime)
 	commandMap := (*dataContainer).Commands
-	reader := bufio.NewReader(c)
+	incomingLineChan := make(chan string, 10)
+	go func() {
+		reader := bufio.NewReader(c)
+		for {
+			incoming, err := reader.ReadString('\n')
+			if err != nil {
+				customLogger.Printf("Unable to read from %s: %s", c.RemoteAddr(), err)
+				close(incomingLineChan)
+				break
+			}
+			incomingLineChan <- incoming
+		}
+	}()
 	for {
 		c.SetDeadline(time.Now().Add(dataContainer.TimeoutSettings.GeneralTimeout))
-		incoming, err := reader.ReadString('\n')
-		if err != nil {
-			customLogger.Printf("Unable to read from %s: %s", c.RemoteAddr(), err)
-			break
-		}
-		r := handleIncomingCommand(c, dataContainer, commandMap, incoming)
-		sendLine(c, r.StatusCode, r.Text, &dataContainer.TimeoutSettings.WriteTimeout)
-		if r.FinalCommand != nil {
-			r.FinalCommand()
+		select {
+		case incoming := <-incomingLineChan:
+			r := handleIncomingCommand(c, dataContainer, commandMap, incoming, connectionContainer)
+			sendLine(c, r.StatusCode, r.Text, &dataContainer.TimeoutSettings.WriteTimeout)
+			if r.FinalCommand != nil {
+				r.FinalCommand()
+			}
+		case sm := <-connectionContainer.SubscriptionChannel:
+			sendLine(c, 200, sm.Format(), &dataContainer.TimeoutSettings.WriteTimeout)
 		}
 	}
 }
@@ -217,6 +311,8 @@ func init() {
 	commands["quit"] = &commandParams{Func: quitCommand, Help: "quit closes the connection"}
 	commands["ping"] = &commandParams{Func: pingCommand, Help: "ping <id> returns pong <id>"}
 	commands["keycount"] = &commandParams{Func: keyCountCommand, Help: "keycount prints number of keys"}
+	commands["subscribe"] = &commandParams{Func: subscribeCommand, Help: "Subscribe to changes"}
+	commands["unsubscribe"] = &commandParams{Func: unsubscribeCommand, Help: "Unsubscribe from changes stream"}
 }
 
 func getKvMap(mapName string) (storage.KVMap, error) {
@@ -266,7 +362,16 @@ func initialize(port int, ip string, mapName string, generalTimeout string, writ
 	// statsChannel is quite busy so we allow some buffering.
 	statsChannel := make(chan statsPoint, 100)
 
-	dataContainer := dataContainer{KeyValueMap: kvMap, Commands: &commands, StatsRequestChannel: statsRequestChannel, StatsResetChannel: statsResetChannel, TimeoutSettings: timeoutSettings, StatsChannel: statsChannel}
+	dataContainer := dataContainer{
+		KeyValueMap:         kvMap,
+		Commands:            &commands,
+		StatsRequestChannel: statsRequestChannel,
+		StatsResetChannel:   statsResetChannel,
+		TimeoutSettings:     timeoutSettings,
+		StatsChannel:        statsChannel,
+		SubscriptionChannel: make(chan SubscriptionCommand, 100),
+		ChangesChannel:      make(chan Command, 100),
+		SenderIDGenerator:   generateSenderID()}
 	return &addr, &dataContainer, nil
 }
 
@@ -278,7 +383,7 @@ func run(dataContainer *dataContainer, addr *net.TCPAddr) error {
 	}
 
 	go statsCollector(dataContainer.StatsChannel, dataContainer.StatsRequestChannel, dataContainer.StatsResetChannel, &wg)
-
+	go subscriptionService(dataContainer.SubscriptionChannel, dataContainer.ChangesChannel)
 	customLogger.Printf("Listening on %s:%d with %s for inactivity timeout and %s for write timeout", addr.IP, addr.Port, dataContainer.TimeoutSettings.GeneralTimeout, dataContainer.TimeoutSettings.WriteTimeout)
 	defer l.Close()
 
