@@ -2,13 +2,15 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"net"
 	"os"
-	"strings"
+	"runtime"
+	"runtime/pprof"
 	"sync"
 	"time"
 
@@ -17,9 +19,11 @@ import (
 
 var customLogger *log.Logger
 
-func sendLine(c net.Conn, statusCode int, line string, writeTimeout *time.Duration) {
+func sendLine(c net.Conn, statusCode int, line []byte, writeTimeout *time.Duration) {
 	c.SetDeadline(time.Now().Add(*writeTimeout))
-	c.Write([]byte(fmt.Sprintf("%d %s\n", statusCode, line)))
+	c.Write([]byte(fmt.Sprintf("%d ", statusCode)))
+	c.Write(line)
+	c.Write([]byte("\n"))
 }
 
 type timeoutSettings struct {
@@ -29,95 +33,99 @@ type timeoutSettings struct {
 
 type response struct {
 	StatusCode   int
-	Text         string
+	Text         []byte
 	FinalCommand func()
 }
 
-func getCommand(c net.Conn, args string, dataContainer *dataContainer, connectionContainer *connectionContainer) response {
-	parts := strings.Split(args, " ")
-	if len(parts) != 2 {
-		return response{StatusCode: 400, Text: "Invalid command. get expects a single parameter (key)"}
+func getCommand(c net.Conn, args []byte, dataContainer *dataContainer, connectionContainer *connectionContainer) response {
+	if bytes.ContainsRune(args, ' ') || len(args) == 0 {
+		return response{StatusCode: 400, Text: []byte("Invalid command. get expects a single parameter (key)")}
 	}
-	value, found := dataContainer.KeyValueMap.GetKey(parts[1])
+	value, found := dataContainer.KeyValueMap.GetKey(string(args))
 	if !found {
-		return response{StatusCode: 404, Text: "Key not found"}
+		return response{StatusCode: 404, Text: []byte("Key not found")}
 	}
-	return response{StatusCode: 200, Text: string(value)}
+	return response{StatusCode: 200, Text: value}
 }
 
-func deleteCommand(c net.Conn, args string, dataContainer *dataContainer, connectionContainer *connectionContainer) response {
-	parts := strings.Split(args, " ")
-	if len(parts) != 2 {
-		return response{StatusCode: 400, Text: "Invalid command. Delete expects one argument (key)"}
+func deleteCommand(c net.Conn, args []byte, dataContainer *dataContainer, connectionContainer *connectionContainer) response {
+	if bytes.ContainsRune(args, ' ') || len(args) == 0 {
+		return response{StatusCode: 400, Text: []byte("Invalid command. Delete expects one argument (key)")}
 	}
-	dataContainer.KeyValueMap.DeleteKey(parts[1])
-	dataContainer.ChangesChannel <- Command{Command: "delete", Key: parts[1]}
-	return response{StatusCode: 200, Text: "Deleted"}
+	keyName := string(args)
+	dataContainer.KeyValueMap.DeleteKey(keyName)
+	dataContainer.ChangesChannel <- Command{Command: "delete", Key: keyName}
+	return response{StatusCode: 200, Text: []byte("Deleted")}
 }
 
-func setCommand(c net.Conn, args string, dataContainer *dataContainer, connectionContainer *connectionContainer) response {
-	parts := strings.Split(args, " ")
-	if len(parts) != 3 {
-		return response{StatusCode: 400, Text: "Invalid command. Set expects at least two arguments (key and value)"}
+func setCommand(c net.Conn, args []byte, dataContainer *dataContainer, connectionContainer *connectionContainer) response {
+	firstSpace := bytes.IndexRune(args, ' ')
+	if firstSpace == -1 {
+		return response{StatusCode: 400, Text: []byte("Invalid command. Set expects key and value as parameters")}
 	}
-	// TODO: handle quoting
-	// TODO: don't convert from incoming bytes to strings and back to bytes
-	value := []byte(parts[2])
-	dataContainer.KeyValueMap.SetKey(parts[1], value)
-	dataContainer.ChangesChannel <- Command{Command: "set", Key: parts[1], Value: value}
-	return response{StatusCode: 201, Text: "Created"}
+	keyName := string(args[0:firstSpace])
+	value := args[firstSpace+1:]
+	dataContainer.KeyValueMap.SetKey(keyName, value)
+	dataContainer.ChangesChannel <- Command{Command: "set", Key: keyName, Value: value}
+	return response{StatusCode: 201, Text: []byte("Created")}
 }
 
-func resetCommand(c net.Conn, args string, dataContainer *dataContainer, connectionContainer *connectionContainer) response {
-	args = strings.Trim(args, " ")
-	switch args {
-	case "stats":
+func resetCommand(c net.Conn, args []byte, dataContainer *dataContainer, connectionContainer *connectionContainer) response {
+	if bytes.Compare(args, []byte("stats")) == 0 {
 		dataContainer.StatsResetChannel <- true
-		return response{StatusCode: 200, Text: "Stats reset"}
-	default:
-		return response{StatusCode: 400, Text: "Invalid command. Stats requires type to be reset"}
+		return response{StatusCode: 200, Text: []byte("Stats reset")}
+	} else {
+		return response{StatusCode: 400, Text: []byte("Invalid command. Stats requires type to be reset")}
 	}
 }
 
-func subscribeCommand(c net.Conn, args string, dataContainer *dataContainer, connectionContainer *connectionContainer) response {
+func subscribeCommand(c net.Conn, args []byte, dataContainer *dataContainer, connectionContainer *connectionContainer) response {
 	dataContainer.SubscriptionChannel <- SubscriptionCommand{UnsubscribeSender: false, SenderID: connectionContainer.SenderID, SubscriptionChannel: connectionContainer.SubscriptionChannel}
-	return response{StatusCode: 200, Text: "Subscribed"}
+	return response{StatusCode: 200, Text: []byte("Subscribed")}
 }
 
-func unsubscribeCommand(c net.Conn, args string, dataContainer *dataContainer, connectionContainer *connectionContainer) response {
+func unsubscribeCommand(c net.Conn, args []byte, dataContainer *dataContainer, connectionContainer *connectionContainer) response {
 	dataContainer.SubscriptionChannel <- SubscriptionCommand{UnsubscribeSender: true, SenderID: connectionContainer.SenderID}
-	return response{StatusCode: 200, Text: "Unsubscribed"}
+	return response{StatusCode: 200, Text: []byte("Unsubscribed")}
 }
 
-func pingCommand(c net.Conn, args string, dataContainer *dataContainer, connectionContainer *connectionContainer) response {
-	return response{StatusCode: 200, Text: "pong" + args}
+func pingCommand(c net.Conn, args []byte, dataContainer *dataContainer, connectionContainer *connectionContainer) response {
+	ret := []byte("pong ")
+	ret = append(ret, args...)
+	return response{StatusCode: 200, Text: ret}
 }
 
-func statsCommand(c net.Conn, args string, dataContainer *dataContainer, connectionContainer *connectionContainer) response {
-	statsOutput := "stats"
-	connectionStatsChannel := make(chan string, 1)
+func statsCommand(c net.Conn, args []byte, dataContainer *dataContainer, connectionContainer *connectionContainer) response {
+	statsOutput := []byte("stats")
+	connectionStatsChannel := make(chan []byte, 1)
 	dataContainer.StatsRequestChannel <- connectionStatsChannel
-	statsOutput += <-connectionStatsChannel
+	statsOutput = append(statsOutput, (<-connectionStatsChannel)...)
 	return response{StatusCode: 200, Text: statsOutput}
 }
 
-func keyCountCommand(c net.Conn, args string, dataContainer *dataContainer, connectionContainer *connectionContainer) response {
+func keyCountCommand(c net.Conn, args []byte, dataContainer *dataContainer, connectionContainer *connectionContainer) response {
 	keyCount := dataContainer.KeyValueMap.GetKeyCount()
 	if keyCount == -1 {
-		return response{StatusCode: 501, Text: "Not implemented. Current store backend does not support key count"}
+		return response{StatusCode: 501, Text: []byte("Not implemented. Current store backend does not support key count")}
 	}
-	return response{StatusCode: 200, Text: fmt.Sprintf("keycount %d", keyCount)}
+	return response{StatusCode: 200, Text: []byte(fmt.Sprintf("keycount %d", keyCount))}
 }
 
-func quitCommand(c net.Conn, args string, dataContainer *dataContainer, connectionContainer *connectionContainer) response {
-	closeFunc := func() {
-		c.Close()
+func quitCommand(c net.Conn, args []byte, dataContainer *dataContainer, connectionContainer *connectionContainer) response {
+	if bytes.Compare(args, []byte("server")) == 0 {
+		close(dataContainer.QuitChannel)
+		return response{StatusCode: 200, Text: []byte("Bye, server exiting")}
+	} else if bytes.Compare(args, []byte("client")) == 0 || bytes.Compare(args, []byte("")) == 0 {
+		closeFunc := func() {
+			c.Close()
+		}
+		return response{StatusCode: 200, Text: []byte("Bye"), FinalCommand: closeFunc}
 	}
-	return response{StatusCode: 200, Text: "Bye", FinalCommand: closeFunc}
+	return response{StatusCode: 400, Text: []byte("Invalid quit command")}
 }
 
 type commandParams struct {
-	Func func(net.Conn, string, *dataContainer, *connectionContainer) response
+	Func func(net.Conn, []byte, *dataContainer, *connectionContainer) response
 	Help string
 }
 
@@ -127,14 +135,14 @@ type Command struct {
 	Value   []byte
 }
 
-func (c *Command) Format() string {
+func (c *Command) Format() []byte {
 	if len(c.Key) > 0 {
 		if len(c.Value) > 0 {
-			return fmt.Sprintf("%s %s %s", c.Command, c.Key, c.Value)
+			return []byte(fmt.Sprintf("%s %s %s", c.Command, c.Key, c.Value))
 		}
-		return fmt.Sprintf("%s %s", c.Command, c.Key)
+		return []byte(fmt.Sprintf("%s %s", c.Command, c.Key))
 	}
-	return c.Command
+	return []byte(c.Command)
 }
 
 type SubscriptionCommand struct {
@@ -150,13 +158,14 @@ var commands commandMap
 type dataContainer struct {
 	KeyValueMap         storage.KVMap
 	Commands            *commandMap
-	StatsRequestChannel chan chan string
+	StatsRequestChannel chan chan []byte
 	StatsResetChannel   chan bool
 	StatsChannel        chan statsPoint
 	SubscriptionChannel chan SubscriptionCommand
 	ChangesChannel      chan Command
 	SenderIDGenerator   func() string
 	TimeoutSettings     timeoutSettings
+	QuitChannel         chan struct{}
 }
 
 type connectionContainer struct {
@@ -200,17 +209,16 @@ func subscriptionService(subscriptionChannel chan SubscriptionCommand, changesCh
 	}
 }
 
-func handleIncomingCommand(c net.Conn, dataContainer *dataContainer, commandMap *commandMap, incoming string, connectionContainer *connectionContainer) response {
+func handleIncomingCommand(c net.Conn, dataContainer *dataContainer, commandMap *commandMap, incoming []byte, connectionContainer *connectionContainer) response {
 	var command string
-	var args string
-	incoming = strings.TrimRight(incoming, "\n")
-	firstSpace := strings.IndexRune(incoming, ' ')
+	var args []byte
+	firstSpace := bytes.IndexRune(incoming, ' ')
 	if firstSpace != -1 {
-		command = incoming[0:firstSpace]
-		args = incoming[firstSpace:]
+		command = string(incoming[0:firstSpace])
+		args = incoming[firstSpace+1:]
 	} else {
-		command = incoming
-		args = ""
+		command = string(incoming)
+		args = nil
 	}
 	_, found := (*commandMap)[command]
 	var r response
@@ -218,7 +226,7 @@ func handleIncomingCommand(c net.Conn, dataContainer *dataContainer, commandMap 
 		r = (*commandMap)[command].Func(c, args, dataContainer, connectionContainer)
 		dataContainer.StatsChannel <- statsPoint{Status: r.StatusCode, Command: command}
 	} else {
-		r = response{StatusCode: 400, Text: "Invalid command."}
+		r = response{StatusCode: 400, Text: []byte(fmt.Sprintf("Invalid command: %s", command))}
 	}
 	return r
 }
@@ -234,23 +242,28 @@ func handleConnection(c net.Conn, dataContainer *dataContainer) {
 	defer c.Close()
 	defer customLogger.Printf("Stopped serving %s. Connection opened at %s", c.RemoteAddr(), connectionOpenTime)
 	commandMap := (*dataContainer).Commands
-	incomingLineChan := make(chan string, 10)
+	incomingLineChan := make(chan []byte, 10)
 	go func() {
 		reader := bufio.NewReader(c)
 		for {
-			incoming, err := reader.ReadString('\n')
+			incoming, _, err := reader.ReadLine()
 			if err != nil {
 				customLogger.Printf("Unable to read from %s: %s", c.RemoteAddr(), err)
 				close(incomingLineChan)
-				break
+				return
 			}
-			incomingLineChan <- incoming
+			if len(incoming) > 0 {
+				incomingLineChan <- incoming
+			}
 		}
 	}()
 	for {
 		c.SetDeadline(time.Now().Add(dataContainer.TimeoutSettings.GeneralTimeout))
 		select {
 		case incoming := <-incomingLineChan:
+			if len(incoming) == 0 {
+				return
+			}
 			r := handleIncomingCommand(c, dataContainer, commandMap, incoming, connectionContainer)
 			sendLine(c, r.StatusCode, r.Text, &dataContainer.TimeoutSettings.WriteTimeout)
 			if r.FinalCommand != nil {
@@ -273,12 +286,12 @@ type statsContainer struct {
 	S400 uint64
 }
 
-func statsCollector(incomingChannel <-chan statsPoint, statsRequestChannel <-chan chan string, statsResetChannel <-chan bool, wg *sync.WaitGroup) {
+func statsCollector(incomingChannel <-chan statsPoint, statsRequestChannel <-chan chan []byte, statsResetChannel <-chan bool, wg *sync.WaitGroup) {
 	wg.Add(1)
 	defer wg.Done()
 	statsMap := make(map[string]*statsContainer)
 	var sp statsPoint
-	var strchan chan string
+	var strchan chan []byte
 	for {
 		select {
 		case sp = <-incomingChannel:
@@ -301,7 +314,7 @@ func statsCollector(incomingChannel <-chan statsPoint, statsRequestChannel <-cha
 			for commandName, stats := range statsMap {
 				statsOutput += fmt.Sprintf(" %s_200=%d %s_201=%d %s_404=%d %s_400=%d", commandName, stats.S200, commandName, stats.S201, commandName, stats.S404, commandName, stats.S400)
 			}
-			strchan <- statsOutput
+			strchan <- []byte(statsOutput)
 			// This would get garbage collected, but there's no reason not to explicitly close as well.
 			close(strchan)
 		case _ = <-statsResetChannel:
@@ -367,7 +380,7 @@ func initialize(port int, ip string, mapName string, generalTimeout string, writ
 	addr := net.TCPAddr{IP: parsedIP, Port: port}
 
 	// Requesting goroutines should block for these; there's no reason for command handlers to proceed before these are done.
-	statsRequestChannel := make(chan chan string)
+	statsRequestChannel := make(chan chan []byte)
 	statsResetChannel := make(chan bool)
 	// statsChannel is quite busy so we allow some buffering.
 	statsChannel := make(chan statsPoint, 100)
@@ -381,7 +394,9 @@ func initialize(port int, ip string, mapName string, generalTimeout string, writ
 		StatsChannel:        statsChannel,
 		SubscriptionChannel: make(chan SubscriptionCommand, 100),
 		ChangesChannel:      make(chan Command, 100),
-		SenderIDGenerator:   generateSenderID()}
+		SenderIDGenerator:   generateSenderID(),
+		QuitChannel:         make(chan struct{}, 1),
+	}
 	return &addr, &dataContainer, nil
 }
 
@@ -396,14 +411,28 @@ func run(dataContainer *dataContainer, addr *net.TCPAddr) error {
 	go subscriptionService(dataContainer.SubscriptionChannel, dataContainer.ChangesChannel)
 	customLogger.Printf("Listening on %s:%d with %s for inactivity timeout and %s for write timeout", addr.IP, addr.Port, dataContainer.TimeoutSettings.GeneralTimeout, dataContainer.TimeoutSettings.WriteTimeout)
 	defer l.Close()
+	newConnectionChannel := make(chan net.Conn, 100)
+
+	go func() {
+		for {
+			client, err := l.Accept()
+			if err != nil {
+				customLogger.Print(err)
+				close(newConnectionChannel)
+				return
+			}
+			newConnectionChannel <- client
+		}
+	}()
 
 	for {
-		client, err := l.Accept()
-		if err != nil {
-			customLogger.Print(err)
-			continue
+		select {
+		case client := <-newConnectionChannel:
+			go handleConnection(client, dataContainer)
+		case _ = <-dataContainer.QuitChannel:
+			customLogger.Print("Quit command received, quitting")
+			return nil
 		}
-		go handleConnection(client, dataContainer)
 	}
 }
 
@@ -413,7 +442,17 @@ func main() {
 	mapNameFlag := flag.String("map-name", "basic", "Map format to use")
 	generalTimeoutFlag := flag.String("general-timeout", "5s", "General connection inactivity timeout")
 	writeTimeoutFlag := flag.String("write-timeout", "1s", "Write timeout")
+	cpuprofile := flag.String("cpuprofile", "", "write cpu profile to file")
+	memprofile := flag.String("memprofile", "", "write memory profile to file")
 	flag.Parse()
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			log.Fatal(err)
+		}
+		pprof.StartCPUProfile(f)
+		defer pprof.StopCPUProfile()
+	}
 	addr, dataContainer, err := initialize(*portFlag, *ipFlag, *mapNameFlag, *generalTimeoutFlag, *writeTimeoutFlag)
 	if err != nil {
 		customLogger.Fatal(err)
@@ -423,5 +462,16 @@ func main() {
 	if err != nil {
 		customLogger.Fatal(err)
 		os.Exit(1)
+	}
+	if *memprofile != "" {
+		f, err := os.Create(*memprofile)
+		if err != nil {
+			log.Fatal("could not create memory profile: ", err)
+		}
+		defer f.Close() // error handling omitted for example
+		runtime.GC()    // get up-to-date statistics
+		if err := pprof.WriteHeapProfile(f); err != nil {
+			log.Fatal("could not write memory profile: ", err)
+		}
 	}
 }

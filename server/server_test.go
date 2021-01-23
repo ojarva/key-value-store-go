@@ -14,7 +14,7 @@ import (
 func getDummyDataContainer() dataContainer {
 	kvMap := &storage.BasicKvMap{}
 	kvMap.Init()
-	statsRequestChannel := make(chan chan string, 10)
+	statsRequestChannel := make(chan chan []byte, 10)
 	statsResetChannel := make(chan bool, 10)
 	statsChannel := make(chan statsPoint, 100)
 	timeout, _ := time.ParseDuration("5s")
@@ -36,41 +36,41 @@ func getDummyDataContainer() dataContainer {
 
 func TestStatsCollector(t *testing.T) {
 	incomingChannel := make(chan statsPoint)
-	statsRequestChannel := make(chan chan string)
+	statsRequestChannel := make(chan chan []byte)
 	statsResetChannel := make(chan bool)
 	var wg sync.WaitGroup
 	go statsCollector(incomingChannel, statsRequestChannel, statsResetChannel, &wg)
-	statsRequest := make(chan string)
+	statsRequest := make(chan []byte)
 	statsRequestChannel <- statsRequest
-	var statsResponse string
+	var statsResponse []byte
 	statsResponse = <-statsRequest
-	if statsResponse != "" {
+	if len(statsResponse) != 0 {
 		t.Errorf("Empty statsCollector responded with stats: %s", statsResponse)
 	}
 	incomingChannel <- statsPoint{"get", 200}
-	statsRequest = make(chan string)
+	statsRequest = make(chan []byte)
 	statsRequestChannel <- statsRequest
 	statsResponse = <-statsRequest
-	if statsResponse != " get_200=1 get_201=0 get_404=0 get_400=0" {
+	if bytes.Compare(statsResponse, []byte(" get_200=1 get_201=0 get_404=0 get_400=0")) != 0 {
 		t.Errorf("Invalid response from statsCollector for a single metric check: %s", statsResponse)
 	}
 	incomingChannel <- statsPoint{"get", 201}
 	incomingChannel <- statsPoint{"get", 400}
 	incomingChannel <- statsPoint{"get", 404}
 	incomingChannel <- statsPoint{"get", 404}
-	statsRequest = make(chan string)
+	statsRequest = make(chan []byte)
 	statsRequestChannel <- statsRequest
 	statsResponse = <-statsRequest
 
-	if statsResponse != " get_200=1 get_201=1 get_404=2 get_400=1" {
+	if bytes.Compare(statsResponse, []byte(" get_200=1 get_201=1 get_404=2 get_400=1")) != 0 {
 		t.Errorf("Invalid response from statsCollector for multiple check: %s", statsResponse)
 	}
 	statsResetChannel <- true
-	statsRequest = make(chan string)
+	statsRequest = make(chan []byte)
 	statsRequestChannel <- statsRequest
 	statsResponse = <-statsRequest
-	if statsResponse != "" {
-		t.Errorf("Empty statsCollector responded with stats: %s", statsResponse)
+	if len(statsResponse) != 0 {
+		t.Errorf("Empty statsCollector responded with stats: '%s'", statsResponse)
 	}
 }
 
@@ -82,16 +82,16 @@ func TestHandleIncomingCommand(t *testing.T) {
 	commandMap := dataContainer.Commands
 
 	var r response
-	r = handleIncomingCommand(client, &dataContainer, commandMap, "invalid command", connectionContainer)
+	r = handleIncomingCommand(client, &dataContainer, commandMap, []byte("invalid command"), connectionContainer)
 	if r.StatusCode != 400 {
 		t.Errorf("Invalid command produced incorrect response: %d", r.StatusCode)
 	}
-	r = handleIncomingCommand(client, &dataContainer, commandMap, "invalid-command", connectionContainer)
+	r = handleIncomingCommand(client, &dataContainer, commandMap, []byte("invalid-command"), connectionContainer)
 	if r.StatusCode != 400 {
 		t.Errorf("Invalid command produced incorrect response: %d", r.StatusCode)
 	}
 
-	r = handleIncomingCommand(client, &dataContainer, commandMap, "quit", connectionContainer)
+	r = handleIncomingCommand(client, &dataContainer, commandMap, []byte("quit"), connectionContainer)
 	if r.StatusCode != 200 {
 		t.Errorf("Requesting stats produced incorrect response: %d", r.StatusCode)
 	}
@@ -106,13 +106,13 @@ func TestKeyCountCommand(t *testing.T) {
 	connectionContainer := &connectionContainer{}
 	client, _ := net.Pipe()
 	var r response
-	r = keyCountCommand(client, "", &dataContainer, connectionContainer)
+	r = keyCountCommand(client, []byte(""), &dataContainer, connectionContainer)
 	if r.StatusCode != 200 {
 		t.Errorf("keycount returned incorrect status code %d", r.StatusCode)
 	}
 	dataContainer.KeyValueMap = &storage.SyncKvMap{}
 	dataContainer.KeyValueMap.Init()
-	r = keyCountCommand(client, "", &dataContainer, connectionContainer)
+	r = keyCountCommand(client, []byte(""), &dataContainer, connectionContainer)
 	if r.StatusCode != 501 {
 		t.Errorf("keycount returned incorrect status code %d", r.StatusCode)
 	}
@@ -123,11 +123,11 @@ func TestPingCommand(t *testing.T) {
 	connectionContainer := &connectionContainer{}
 	client, _ := net.Pipe()
 	var r response
-	r = pingCommand(client, " asdf", &dataContainer, connectionContainer)
+	r = pingCommand(client, []byte("asdf"), &dataContainer, connectionContainer)
 	if r.StatusCode != 200 {
 		t.Errorf("ping returned incorrect status code %d", r.StatusCode)
 	}
-	if r.Text != "pong asdf" {
+	if bytes.Compare(r.Text, []byte("pong asdf")) != 0 {
 		t.Errorf("ping returned incorrect response %s", r.Text)
 	}
 }
@@ -137,20 +137,20 @@ func TestGetCommand(t *testing.T) {
 	connectionContainer := &connectionContainer{}
 	client, _ := net.Pipe()
 	var r response
-	r = getCommand(client, " asdf", &dataContainer, connectionContainer)
+	r = getCommand(client, []byte("asdf"), &dataContainer, connectionContainer)
 	if r.StatusCode != 404 {
 		t.Errorf("get returned incorrect status code for invalid key: %d", r.StatusCode)
 	}
-	r = getCommand(client, "", &dataContainer, connectionContainer)
+	r = getCommand(client, []byte(""), &dataContainer, connectionContainer)
 	if r.StatusCode != 400 {
 		t.Errorf("get returned incorrect status code for invalid key: %d", r.StatusCode)
 	}
-	r = setCommand(client, " asdf foo", &dataContainer, connectionContainer)
-	r = getCommand(client, " asdf", &dataContainer, connectionContainer)
+	r = setCommand(client, []byte("asdf foo"), &dataContainer, connectionContainer)
+	r = getCommand(client, []byte("asdf"), &dataContainer, connectionContainer)
 	if r.StatusCode != 200 {
 		t.Errorf("get returned incorrect status code for valid key: %d", r.StatusCode)
 	}
-	if r.Text != "foo" {
+	if bytes.Compare(r.Text, []byte("foo")) != 0 {
 		t.Errorf("get returned incorrect data for valid key: %s", r.Text)
 	}
 }
@@ -161,14 +161,14 @@ func TestStatsCommand(t *testing.T) {
 	client, _ := net.Pipe()
 	go func() {
 		incomingChannel := <-dataContainer.StatsRequestChannel
-		incomingChannel <- " your stats"
+		incomingChannel <- []byte("your stats")
 	}()
 	var r response
-	r = statsCommand(client, "", &dataContainer, connectionContainer)
+	r = statsCommand(client, []byte(""), &dataContainer, connectionContainer)
 	if r.StatusCode != 200 {
 		t.Errorf("stats returned incorrect status code %d", r.StatusCode)
 	}
-	if r.Text != "stats your stats" {
+	if bytes.Compare(r.Text, []byte("stats your stats")) == 0 {
 		t.Errorf("stats did not return our dummy data: %s", r.Text)
 	}
 }
@@ -177,7 +177,7 @@ func TestSubscribeCommand(t *testing.T) {
 	dataContainer := getDummyDataContainer()
 	connectionContainer := &connectionContainer{SenderID: "mysenderid"}
 	client, _ := net.Pipe()
-	subscribeCommand(client, "", &dataContainer, connectionContainer)
+	subscribeCommand(client, []byte(""), &dataContainer, connectionContainer)
 	sc := <-dataContainer.SubscriptionChannel
 	if sc.SenderID != "mysenderid" {
 		t.Errorf("subscribeCommand send out invalid senderID: %s", sc.SenderID)
@@ -191,7 +191,7 @@ func TestUnsubscribeCommand(t *testing.T) {
 	dataContainer := getDummyDataContainer()
 	connectionContainer := &connectionContainer{SenderID: "mysenderid"}
 	client, _ := net.Pipe()
-	unsubscribeCommand(client, "", &dataContainer, connectionContainer)
+	unsubscribeCommand(client, []byte(""), &dataContainer, connectionContainer)
 	sc := <-dataContainer.SubscriptionChannel
 	if sc.SenderID != "mysenderid" {
 		t.Errorf("subscribeCommand send out invalid senderID: %s", sc.SenderID)
@@ -209,11 +209,11 @@ func TestResetCommand(t *testing.T) {
 		<-dataContainer.StatsResetChannel
 	}()
 	var r response
-	r = resetCommand(client, "", &dataContainer, connectionContainer)
+	r = resetCommand(client, []byte(""), &dataContainer, connectionContainer)
 	if r.StatusCode != 400 {
 		t.Errorf("Invalid reset returned incorrect response. %d: %s", r.StatusCode, r.Text)
 	}
-	r = resetCommand(client, " stats", &dataContainer, connectionContainer)
+	r = resetCommand(client, []byte("stats"), &dataContainer, connectionContainer)
 	if r.StatusCode != 200 {
 		t.Errorf("Invalid response from reset: %d: %s", r.StatusCode, r.Text)
 	}
@@ -224,7 +224,7 @@ func TestDeleteCommand(t *testing.T) {
 	connectionContainer := &connectionContainer{}
 	client, _ := net.Pipe()
 	var r response
-	r = deleteCommand(client, " asdf", &dataContainer, connectionContainer)
+	r = deleteCommand(client, []byte("asdf"), &dataContainer, connectionContainer)
 	if r.StatusCode != 200 {
 		t.Errorf("delete returned incorrect status code: %d", r.StatusCode)
 	}
@@ -239,7 +239,7 @@ func TestDeleteCommand(t *testing.T) {
 	default:
 		t.Error("delete command did not publish a change")
 	}
-	r = deleteCommand(client, "", &dataContainer, connectionContainer)
+	r = deleteCommand(client, []byte(""), &dataContainer, connectionContainer)
 	if r.StatusCode != 400 {
 		t.Errorf("delete returned incorrect status code: %d", r.StatusCode)
 	}
@@ -251,7 +251,7 @@ func TestSetCommand(t *testing.T) {
 	connectionContainer := &connectionContainer{}
 	client, _ := net.Pipe()
 	var r response
-	r = setCommand(client, " asdf foo", &dataContainer, connectionContainer)
+	r = setCommand(client, []byte("asdf foo"), &dataContainer, connectionContainer)
 	if r.StatusCode != 201 {
 		t.Errorf("set returned incorrect status code for invalid key: %d", r.StatusCode)
 	}
@@ -269,7 +269,7 @@ func TestSetCommand(t *testing.T) {
 	default:
 		t.Error("set command did not publish a change")
 	}
-	r = setCommand(client, " asdf", &dataContainer, connectionContainer)
+	r = setCommand(client, []byte("asdf"), &dataContainer, connectionContainer)
 	if r.StatusCode != 400 {
 		t.Errorf("set returned incorrect status code for invalid key: %d", r.StatusCode)
 	}
@@ -388,20 +388,20 @@ func TestSubscriptionService(t *testing.T) {
 
 func TestCommandFormat(t *testing.T) {
 	var command Command
-	var formattedCommand string
+	var formattedCommand []byte
 	command = Command{Command: "mycommand"}
 	formattedCommand = command.Format()
-	if formattedCommand != "mycommand" {
+	if bytes.Compare(formattedCommand, []byte("mycommand")) != 0 {
 		t.Errorf("Invalid format for command-only: %s", formattedCommand)
 	}
 	command.Key = "mykey"
 	formattedCommand = command.Format()
-	if formattedCommand != "mycommand mykey" {
+	if bytes.Compare(formattedCommand, []byte("mycommand mykey")) != 0 {
 		t.Errorf("Invalid format for command+key: %s", formattedCommand)
 	}
 	command.Value = []byte("myvalue")
 	formattedCommand = command.Format()
-	if formattedCommand != "mycommand mykey myvalue" {
+	if bytes.Compare(formattedCommand, []byte("mycommand mykey myvalue")) != 0 {
 		t.Errorf("Invalid format for command+key+value: %s", formattedCommand)
 	}
 }
