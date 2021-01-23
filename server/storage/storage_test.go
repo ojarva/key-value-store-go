@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"fmt"
+	"math/rand"
 	"os"
+	"sync"
 	"testing"
 	"time"
 )
@@ -91,6 +93,43 @@ func testDelete(kvmap KVMap, backendName string, t *testing.T) {
 	}
 	kvmap.DeleteKey("testkey")
 }
+
+func benchmarkMap(b *testing.B, kvmap KVMap) {
+	kvmap.Init()
+	b.ResetTimer()
+	value := []byte("my test value")
+	wg := &sync.WaitGroup{}
+	for i := 0; i < b.N; i++ {
+		go func() {
+			wg.Add(1)
+			for i := 0; i < 1000; i++ {
+				key := fmt.Sprintf("key%d", rand.Int())
+				kvmap.SetKey(key, value)
+				kvmap.GetKey(key)
+				kvmap.SetKey(key, value)
+				kvmap.GetKey(key + "invalid")
+			}
+			wg.Done()
+		}()
+	}
+	wg.Wait()
+}
+
+func BenchmarkBasicKvMap(b *testing.B) {
+	kvmap := &BasicKvMap{}
+	benchmarkMap(b, kvmap)
+}
+
+func BenchmarkSyncKvMap(b *testing.B) {
+	kvmap := &SyncKvMap{}
+	benchmarkMap(b, kvmap)
+}
+
+func BenchmarkShardedKvMap(b *testing.B) {
+	kvmap := &ShardedKvMap{}
+	benchmarkMap(b, kvmap)
+}
+
 func TestBasicKvMap(t *testing.T) {
 	kvmap := &BasicKvMap{}
 	testBackend(kvmap, "basic", t)
