@@ -208,7 +208,7 @@ func statsCollector(incomingChannel <-chan statsPoint, statsRequestChannel <-cha
 }
 
 func init() {
-	customLogger = log.New(os.Stderr, "", log.Ldate|log.Lmicroseconds|log.LUTC)
+	customLogger = log.New(os.Stderr, "", log.Ldate|log.Lmicroseconds|log.LUTC|log.Llongfile)
 	commands = make(commandMap)
 	commands["set"] = &commandParams{Func: setCommand, Help: "set <key> <value> sets a new key"}
 	commands["get"] = &commandParams{Func: getCommand, Help: "get <key> gets a key or returns an error"}
