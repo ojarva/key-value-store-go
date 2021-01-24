@@ -415,3 +415,122 @@ func TestSyncLogCompactor(t *testing.T) {
 	var outFile bytes.Buffer
 	syncLogCompactor(inFile, &outFile)
 }
+
+func runHolder(addr *net.TCPAddr, dataContainer *dataContainer, wg *sync.WaitGroup, b *testing.B) {
+	wg.Add(1)
+	err := run(dataContainer, addr, nil)
+	if err != nil {
+		b.Errorf("run failed with %s", err)
+	}
+	wg.Done()
+}
+
+func waitUntilListening(port int, b *testing.B) {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	timeout := time.After(5 * time.Second)
+	for {
+		select {
+		case <-timeout:
+			b.Error("Server did not start listening; timeout")
+			return
+		case <-ticker.C:
+			_, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+			if err != nil {
+				fmt.Println("Wait until listening is unable to connect:", err)
+				continue
+			}
+			fmt.Println("Server is listening")
+			return
+		}
+	}
+}
+
+func waitUntilNotListening(port int, b *testing.B) {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	timeout := time.After(5 * time.Second)
+	for {
+		select {
+		case <-timeout:
+			b.Error("Server did not stop listening; timeout")
+			return
+		case <-ticker.C:
+			_, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+			if err != nil {
+				return
+			}
+			continue
+		}
+	}
+}
+
+func perfTestClient(wg *sync.WaitGroup, port int, b *testing.B, jobDoneChan chan struct{}) {
+	defer wg.Done()
+	c, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		b.Errorf("Unable to connect: %s", err)
+		return
+	}
+	defer c.Close()
+	reader := bufio.NewReader(c)
+	for i := 0; i < 100; i++ {
+		validKey := rand.Int63()
+		fmt.Fprintf(c, "set %d w%d\n", validKey, rand.Int63())
+		fmt.Fprintf(c, "set %d n%d\n", validKey, rand.Int63())
+		fmt.Fprintf(c, "get %d\n", validKey)
+		fmt.Fprintf(c, "get invalidkey%d\n", rand.Int63())
+		_, err = reader.ReadString('\n')
+		if err != nil {
+			b.Errorf("Read failed: %s", err)
+		}
+	}
+	jobDoneChan <- struct{}{}
+}
+
+func quitServer(port int, b *testing.B) {
+	c, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		b.Errorf("Unable to connect: %s", err)
+		return
+	}
+	defer c.Close()
+	c.Write([]byte("quit server\n"))
+}
+
+func BenchmarkListeningServer(b *testing.B) {
+	port := 8085
+	waitUntilNotListening(port, b)
+	addr, dataContainer, err := initialize(port, "127.0.0.1", "basic", "1s", "1s")
+	if err != nil {
+		b.Errorf("Initialize failed with %s", err)
+	}
+	var wg sync.WaitGroup
+	go runHolder(addr, dataContainer, &wg, b)
+	waitUntilListening(port, b)
+	var clientWg sync.WaitGroup
+	cgr := make(chan struct{}, 50)
+	for i := 0; i < 50; i++ {
+		cgr <- struct{}{}
+	}
+	jobDone := make(chan struct{})
+
+	go func() {
+		for i := 0; i < b.N; i++ {
+			<-jobDone
+			cgr <- struct{}{}
+		}
+	}()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		<-cgr
+		clientWg.Add(1)
+		go perfTestClient(&clientWg, port, b, jobDone)
+	}
+	log.Println("Waiting for clients to finish")
+	clientWg.Wait()
+	log.Println("Quitting server")
+	quitServer(port, b)
+	log.Println("Waiting for server to quit")
+	wg.Wait()
+	log.Println("Server quit done")
+}
