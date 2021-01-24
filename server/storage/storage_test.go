@@ -73,7 +73,24 @@ func testBackend(kvmap KVMap, backendName string, t *testing.T) {
 	if bytes.Compare(returnedValue, newTestValue) != 0 {
 		t.Errorf("Backend %s returned %s for the original key after another key was added, expected %s", backendName, returnedValue, newTestValue)
 	}
+}
 
+func testItems(kvmap KVMap, backendName string, t *testing.T) {
+	kvmap.Init()
+	kvmap.SetKey("testkey1", []byte("testvalue1"))
+	kvmap.SetKey("testkey2", []byte("testvalue2"))
+	incomingChannel := make(chan KVPair)
+	var wg sync.WaitGroup
+	var keyCount int
+	go func() {
+		wg.Add(1)
+		for range incomingChannel {
+			keyCount++
+		}
+		wg.Done()
+	}()
+	kvmap.Items(incomingChannel)
+	wg.Wait()
 }
 
 func testDelete(kvmap KVMap, backendName string, t *testing.T) {
@@ -148,6 +165,26 @@ func TestRaceKvMap(t *testing.T) {
 func TestShardedKvMap(t *testing.T) {
 	kvmap := &ShardedKvMap{}
 	testBackend(kvmap, "sharded", t)
+}
+
+func TestBasicKvMapItems(t *testing.T) {
+	kvmap := &BasicKvMap{}
+	testItems(kvmap, "basic", t)
+}
+
+func TestSyncKvMapItems(t *testing.T) {
+	kvmap := &SyncKvMap{}
+	testItems(kvmap, "sync", t)
+}
+
+func TestRaceKvMapItems(t *testing.T) {
+	kvmap := &RaceKvMap{}
+	testItems(kvmap, "race", t)
+}
+
+func TestShardedKvMapItems(t *testing.T) {
+	kvmap := &ShardedKvMap{}
+	testItems(kvmap, "sharded", t)
 }
 
 func TestBasicKvMapDelete(t *testing.T) {

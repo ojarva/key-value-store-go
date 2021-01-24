@@ -22,6 +22,11 @@ func getDataDir() string {
 	return path
 }
 
+type KVPair struct {
+	Key   string
+	Value []byte
+}
+
 // KVMap specifies storage backend interface
 type KVMap interface {
 	DeleteKey(key string)
@@ -29,6 +34,7 @@ type KVMap interface {
 	GetKeyCount() int
 	Init()
 	SetKey(key string, value []byte)
+	Items(chan KVPair)
 }
 
 // RaceKvMap is unsafe implementation without a proper locking.
@@ -60,6 +66,14 @@ func (d *RaceKvMap) GetKeyCount() int {
 // DeleteKey removes key and associated value from storage
 func (d *RaceKvMap) DeleteKey(key string) {
 	delete(d.values, key)
+}
+
+// Items iterates over all keys in the map. Performance-wise this is terrible.
+func (d *RaceKvMap) Items(outChan chan KVPair) {
+	for key, value := range d.values {
+		outChan <- KVPair{Key: key, Value: value}
+	}
+	close(outChan)
 }
 
 // BasicKvMap implements a simple backend with a single shared RWMutex to coordinate concurrent writes and reads.
@@ -102,6 +116,16 @@ func (d *BasicKvMap) DeleteKey(key string) {
 	delete(d.values, key)
 }
 
+// Items iterates over all keys in the map. Performance-wise this is terrible.
+func (d *BasicKvMap) Items(outChan chan KVPair) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+	for key, value := range d.values {
+		outChan <- KVPair{Key: key, Value: value}
+	}
+	close(outChan)
+}
+
 // SyncKvMap uses sync.Map which automatically handles concurrent access. sync.Map is append-only structure which does not perform well for repeating writes / delete/add/delete/add cycles.
 type SyncKvMap struct {
 	values sync.Map
@@ -134,6 +158,16 @@ func (d *SyncKvMap) GetKeyCount() int {
 // DeleteKey removes key and associated value from storage
 func (d *SyncKvMap) DeleteKey(key string) {
 	d.values.Delete(key)
+}
+
+// Items iterates over all keys in the map. Performance-wise this is terrible.
+func (d *SyncKvMap) Items(outChan chan KVPair) {
+	sender := func(key interface{}, value interface{}) bool {
+		outChan <- KVPair{Key: key.(string), Value: value.([]byte)}
+		return true
+	}
+	d.values.Range(sender)
+	close(outChan)
 }
 
 // ShardedKvMap implements a backend with separate locks for different shards. Sharded locking should reduce lock contention on a busy database, especially if some keys are extremely busy and keys in different shards are occasionally accessed.
@@ -195,6 +229,19 @@ func (d *ShardedKvMap) DeleteKey(key string) {
 	d.mutexes[shard].Lock()
 	defer d.mutexes[shard].Unlock()
 	delete(d.values[shard], key)
+}
+
+// Items iterates over all keys in the map. Performance-wise this is terrible.
+func (d *ShardedKvMap) Items(outChan chan KVPair) {
+	var i uint8
+	for i = 0; i < 16; i++ {
+		d.mutexes[i].RLock()
+		for key, value := range d.values[i] {
+			outChan <- KVPair{Key: key, Value: value}
+		}
+		d.mutexes[i].RUnlock()
+	}
+	close(outChan)
 }
 
 // FileBackedStorage uses files directly to store all the data. This is highly inefficient but very durable.
@@ -265,6 +312,11 @@ func (d *FileBackedStorage) DeleteKey(key string) {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
 	os.Remove(filename)
+}
+
+// Items iterates over all keys in the map. Not implemented for file-backed storage
+func (d *FileBackedStorage) Items(outChan chan KVPair) {
+	close(outChan)
 }
 
 type FileSyncAction int
@@ -362,4 +414,9 @@ func (d *CachedFileBackedStorage) DeleteKey(key string) {
 	delete(d.values, keyHash)
 	d.valuesMutex.Unlock()
 	d.writeoutChannel <- outFile{Key: keyHash, Value: nil, Action: DeleteAction}
+}
+
+// Items iterates over all keys in the map. Not implemented for file-backed storage
+func (d *CachedFileBackedStorage) Items(outChan chan KVPair) {
+	close(outChan)
 }
