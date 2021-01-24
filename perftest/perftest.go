@@ -44,7 +44,8 @@ func testClient(host string, port int, wg *sync.WaitGroup, cmdCount int, channel
 	reader := bufio.NewReader(c)
 	for i := 0; i < cmdCount; i++ {
 		validKey := rand.Int63()
-		fmt.Fprintf(c, "set %d %d\n", validKey, rand.Int63())
+		fmt.Fprintf(c, "set %d w%d\n", validKey, rand.Int63())
+		fmt.Fprintf(c, "set %d n%d\n", validKey, rand.Int63())
 		fmt.Fprintf(c, "get %d\n", validKey)
 		fmt.Fprintf(c, "get invalidkey%d\n", rand.Int63())
 		_, err = reader.ReadString('\n')
@@ -79,5 +80,5 @@ func main() {
 
 	fmt.Printf("Running %d threads took %dms\n", *threadCountFlag, (endTime.UnixNano()-startTime.UnixNano())/int64(time.Millisecond))
 	fmt.Printf("Total time executing commands: %dms\n", totalCommandTime/int64(time.Millisecond))
-	fmt.Printf("Total time per command: %fns\n", float64(totalCommandTime)/float64(*cmdCountFlag)/float64(*threadCountFlag)/3)
+	fmt.Printf("Total time per command: %fns\n", float64(totalCommandTime)/float64(*cmdCountFlag)/float64(*threadCountFlag)/4)
 }
