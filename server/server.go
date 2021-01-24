@@ -11,6 +11,7 @@ import (
 	"os"
 	"runtime"
 	"runtime/pprof"
+	"strings"
 	"sync"
 	"time"
 
@@ -231,6 +232,22 @@ func handleIncomingCommand(c net.Conn, dataContainer *dataContainer, commandMap 
 	return r
 }
 
+func readConnection(c net.Conn, incomingLineChan chan []byte) {
+	reader := bufio.NewReader(c)
+	for {
+		incoming, err := reader.ReadString('\n')
+		if err != nil {
+			customLogger.Printf("Unable to read from %s: %s", c.RemoteAddr(), err)
+			close(incomingLineChan)
+			return
+		}
+		incoming = strings.TrimRight(incoming, "\n")
+		if len(incoming) > 0 {
+			incomingLineChan <- []byte(incoming)
+		}
+	}
+}
+
 func handleConnection(c net.Conn, dataContainer *dataContainer) {
 	connectionContainer := &connectionContainer{
 		SenderID:            dataContainer.SenderIDGenerator(),
@@ -243,28 +260,15 @@ func handleConnection(c net.Conn, dataContainer *dataContainer) {
 	defer customLogger.Printf("Stopped serving %s. Connection opened at %s", c.RemoteAddr(), connectionOpenTime)
 	commandMap := (*dataContainer).Commands
 	incomingLineChan := make(chan []byte, 10)
-	go func() {
-		reader := bufio.NewReader(c)
-		for {
-			incoming, _, err := reader.ReadLine()
-			if err != nil {
-				customLogger.Printf("Unable to read from %s: %s", c.RemoteAddr(), err)
-				close(incomingLineChan)
-				return
-			}
-			if len(incoming) > 0 {
-				incomingLineChan <- incoming
-			}
-		}
-	}()
+	go readConnection(c, incomingLineChan)
 	for {
 		c.SetDeadline(time.Now().Add(dataContainer.TimeoutSettings.GeneralTimeout))
 		select {
-		case incoming := <-incomingLineChan:
-			if len(incoming) == 0 {
+		case clientMessage := <-incomingLineChan:
+			if len(clientMessage) == 0 {
 				return
 			}
-			r := handleIncomingCommand(c, dataContainer, commandMap, incoming, connectionContainer)
+			r := handleIncomingCommand(c, dataContainer, commandMap, clientMessage, connectionContainer)
 			sendLine(c, r.StatusCode, r.Text, &dataContainer.TimeoutSettings.WriteTimeout)
 			if r.FinalCommand != nil {
 				r.FinalCommand()
