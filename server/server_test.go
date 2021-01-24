@@ -3,7 +3,12 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"fmt"
+	"io"
+	"log"
+	"math/rand"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -348,7 +353,8 @@ func TestHandleQuit(t *testing.T) {
 func TestSubscriptionService(t *testing.T) {
 	subscriptionChannel := make(chan SubscriptionCommand, 1)
 	changesChannel := make(chan Command, 1)
-	go subscriptionService(subscriptionChannel, changesChannel)
+	var outBuffer bytes.Buffer
+	go subscriptionService(subscriptionChannel, changesChannel, &outBuffer)
 	connectionChannel := make(chan Command, 1)
 	changesChannel <- Command{Command: "testCommand"}
 	time.Sleep(100 * time.Millisecond)
@@ -358,31 +364,28 @@ func TestSubscriptionService(t *testing.T) {
 		SubscriptionChannel: connectionChannel}
 	time.Sleep(100 * time.Millisecond)
 	changesChannel <- Command{Command: "testCommand2"}
-	time.Sleep(100 * time.Millisecond)
 	select {
 	case cmd := <-connectionChannel:
 		if cmd.Command != "testCommand2" {
 			t.Errorf("Invalid subscription message from subscription service: %s", cmd)
 		}
-	default:
+	case <-time.After(100 * time.Millisecond):
 		t.Error("No messages from subscription service to subscribed client")
 	}
 	subscriptionChannel <- SubscriptionCommand{
 		UnsubscribeSender:   false,
 		SenderID:            "myid",
 		SubscriptionChannel: connectionChannel}
-	time.Sleep(100 * time.Millisecond)
 	subscriptionChannel <- SubscriptionCommand{
 		UnsubscribeSender:   true,
 		SenderID:            "myid",
 		SubscriptionChannel: connectionChannel}
 	time.Sleep(100 * time.Millisecond)
 	changesChannel <- Command{Command: "testCommand3"}
-	time.Sleep(100 * time.Millisecond)
 	select {
 	case cmd := <-connectionChannel:
 		t.Errorf("Message to unsubscribed client: %s", cmd)
-	default:
+	case <-time.After(100 * time.Millisecond):
 	}
 }
 
@@ -404,4 +407,11 @@ func TestCommandFormat(t *testing.T) {
 	if bytes.Compare(formattedCommand, []byte("mycommand mykey myvalue")) != 0 {
 		t.Errorf("Invalid format for command+key+value: %s", formattedCommand)
 	}
+}
+
+func TestSyncLogCompactor(t *testing.T) {
+	var inFile io.Reader
+	inFile = strings.NewReader("set mykey myvalue\nset mykey mynewvalue\ndelete nonexistingkey\nset anotherkey foo\ndelete anotherkey\nset thirdkey somevalue\n")
+	var outFile bytes.Buffer
+	syncLogCompactor(inFile, &outFile)
 }

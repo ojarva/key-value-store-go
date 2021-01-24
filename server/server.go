@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -75,9 +76,8 @@ func resetCommand(c net.Conn, args []byte, dataContainer *dataContainer, connect
 	if bytes.Compare(args, []byte("stats")) == 0 {
 		dataContainer.StatsResetChannel <- true
 		return response{StatusCode: 200, Text: []byte("Stats reset")}
-	} else {
-		return response{StatusCode: 400, Text: []byte("Invalid command. Stats requires type to be reset")}
 	}
+	return response{StatusCode: 400, Text: []byte("Invalid command. Stats requires type to be reset")}
 }
 
 func subscribeCommand(c net.Conn, args []byte, dataContainer *dataContainer, connectionContainer *connectionContainer) response {
@@ -185,8 +185,22 @@ func generateSenderID() func() string {
 	}
 }
 
-func subscriptionService(subscriptionChannel chan SubscriptionCommand, changesChannel chan Command) {
+func syncLogWriter(outputWriter io.Writer, outputWriterChannel chan Command) {
+	for cmd := range outputWriterChannel {
+		outputWriter.Write([]byte(cmd.Command + " " + cmd.Key + " "))
+		outputWriter.Write([]byte(cmd.Value))
+		outputWriter.Write([]byte("\n"))
+	}
+}
+
+func subscriptionService(subscriptionChannel chan SubscriptionCommand, changesChannel chan Command, outputWriter io.Writer) {
 	subscriptions := make(map[string]SubscriptionCommand)
+	outputWriterChannel := make(chan Command, 100)
+	outputWriterEnabled := false
+	if outputWriter != nil {
+		go syncLogWriter(outputWriter, outputWriterChannel)
+		outputWriterEnabled = true
+	}
 	for {
 		select {
 		case sc := <-subscriptionChannel:
@@ -203,6 +217,9 @@ func subscriptionService(subscriptionChannel chan SubscriptionCommand, changesCh
 				subscriptions[sc.SenderID] = sc
 			}
 		case c := <-changesChannel:
+			if outputWriterEnabled {
+				outputWriterChannel <- c
+			}
 			for _, subscriber := range subscriptions {
 				subscriber.SubscriptionChannel <- c
 			}
@@ -404,7 +421,19 @@ func initialize(port int, ip string, mapName string, generalTimeout string, writ
 	return &addr, &dataContainer, nil
 }
 
-func run(dataContainer *dataContainer, addr *net.TCPAddr) error {
+func acceptClients(l *net.TCPListener, newConnectionChannel chan net.Conn) {
+	for {
+		client, err := l.Accept()
+		if err != nil {
+			customLogger.Print(err)
+			close(newConnectionChannel)
+			return
+		}
+		newConnectionChannel <- client
+	}
+}
+
+func run(dataContainer *dataContainer, addr *net.TCPAddr, outputWriter io.Writer) error {
 	var wg sync.WaitGroup
 	l, err := net.ListenTCP("tcp4", addr)
 	if err != nil {
@@ -412,23 +441,11 @@ func run(dataContainer *dataContainer, addr *net.TCPAddr) error {
 	}
 
 	go statsCollector(dataContainer.StatsChannel, dataContainer.StatsRequestChannel, dataContainer.StatsResetChannel, &wg)
-	go subscriptionService(dataContainer.SubscriptionChannel, dataContainer.ChangesChannel)
+	go subscriptionService(dataContainer.SubscriptionChannel, dataContainer.ChangesChannel, outputWriter)
 	customLogger.Printf("Listening on %s:%d with %s for inactivity timeout and %s for write timeout", addr.IP, addr.Port, dataContainer.TimeoutSettings.GeneralTimeout, dataContainer.TimeoutSettings.WriteTimeout)
 	defer l.Close()
 	newConnectionChannel := make(chan net.Conn, 100)
-
-	go func() {
-		for {
-			client, err := l.Accept()
-			if err != nil {
-				customLogger.Print(err)
-				close(newConnectionChannel)
-				return
-			}
-			newConnectionChannel <- client
-		}
-	}()
-
+	go acceptClients(l, newConnectionChannel)
 	for {
 		select {
 		case client := <-newConnectionChannel:
@@ -440,15 +457,53 @@ func run(dataContainer *dataContainer, addr *net.TCPAddr) error {
 	}
 }
 
+func dumpSyncLogToFile(wg *sync.WaitGroup, outChannel chan storage.KVPair, outFile io.Writer) {
+	wg.Add(1)
+	for kv := range outChannel {
+		outFile.Write([]byte("set " + kv.Key + " "))
+		outFile.Write(kv.Value)
+		outFile.Write([]byte("\n"))
+	}
+	wg.Done()
+}
+
+func syncLogCompactor(inFile io.Reader, outFile io.Writer) {
+	keyMap := storage.BasicKvMap{}
+	keyMap.Init()
+	scanner := bufio.NewScanner(inFile)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "set ") {
+			parts := strings.Split(line, " ")
+			keyMap.SetKey(parts[1], []byte(parts[2]))
+		} else if strings.HasPrefix(line, "delete ") {
+			parts := strings.Split(line, " ")
+			keyMap.DeleteKey((parts[1]))
+		}
+	}
+
+	outChannel := make(chan storage.KVPair, 1000)
+	var wg sync.WaitGroup
+	go dumpSyncLogToFile(&wg, outChannel, outFile)
+	keyMap.Items(outChannel)
+	wg.Wait()
+}
+
 func main() {
 	portFlag := flag.Int("port", 1234, "Port to listen on")
 	ipFlag := flag.String("ip", "0.0.0.0", "IP address to listen on")
 	mapNameFlag := flag.String("map-name", "basic", "Map format to use")
 	generalTimeoutFlag := flag.String("general-timeout", "5s", "General connection inactivity timeout")
 	writeTimeoutFlag := flag.String("write-timeout", "1s", "Write timeout")
+	outLogFilenameFlag := flag.String("outlog-filename", "", "Filename to append changelog")
 	cpuprofile := flag.String("cpuprofile", "", "write cpu profile to file")
 	memprofile := flag.String("memprofile", "", "write memory profile to file")
+
+	compactFlag := flag.Bool("compact", false, "Run compactor and exit")
+	compactInFileFlag := flag.String("compact-in-file", "", "Input filename for compactor")
+	compactOutFileFlag := flag.String("compact-out-file", "", "Input filename for compactor")
 	flag.Parse()
+
 	if *cpuprofile != "" {
 		f, err := os.Create(*cpuprofile)
 		if err != nil {
@@ -457,15 +512,42 @@ func main() {
 		pprof.StartCPUProfile(f)
 		defer pprof.StopCPUProfile()
 	}
-	addr, dataContainer, err := initialize(*portFlag, *ipFlag, *mapNameFlag, *generalTimeoutFlag, *writeTimeoutFlag)
-	if err != nil {
-		customLogger.Fatal(err)
-		os.Exit(1)
-	}
-	err = run(dataContainer, addr)
-	if err != nil {
-		customLogger.Fatal(err)
-		os.Exit(1)
+
+	if *compactFlag {
+		var inFile io.Reader
+		var outFile io.Writer
+		var err error
+		if len(*compactInFileFlag) == 0 || len(*compactOutFileFlag) == 0 {
+			log.Fatal("Both -compact-in-file and -compact-out-file are mandatory")
+		}
+		outFile, err = os.OpenFile(*compactOutFileFlag, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if err != nil {
+			customLogger.Fatal(err)
+		}
+		inFile, err = os.OpenFile(*compactInFileFlag, os.O_RDONLY, 0600)
+		if err != nil {
+			customLogger.Fatal(err)
+		}
+		syncLogCompactor(inFile, outFile)
+	} else {
+		var outFile io.Writer
+		var err error
+		if len(*outLogFilenameFlag) > 0 {
+			outFile, err = os.OpenFile(*outLogFilenameFlag, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0600)
+			if err != nil {
+				log.Fatal(err)
+			}
+		}
+		addr, dataContainer, err := initialize(*portFlag, *ipFlag, *mapNameFlag, *generalTimeoutFlag, *writeTimeoutFlag)
+		if err != nil {
+			customLogger.Fatal(err)
+			os.Exit(1)
+		}
+		err = run(dataContainer, addr, outFile)
+		if err != nil {
+			customLogger.Fatal(err)
+			os.Exit(1)
+		}
 	}
 	if *memprofile != "" {
 		f, err := os.Create(*memprofile)
