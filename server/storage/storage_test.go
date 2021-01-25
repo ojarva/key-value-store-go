@@ -11,72 +11,70 @@ import (
 	"time"
 )
 
-func testBackend(kvmap KVMap, backendName string, t *testing.T) {
-	kvmap.Init()
-	if backendName != "sync" {
+func testBackend(kvmap KVMap, t *testing.T) {
+	if kvmap.MapName() != Sync {
 		keyCount := kvmap.GetKeyCount()
 		if keyCount != 0 {
-			t.Errorf("Backend %s returned invalid key count for empty db: %d", backendName, keyCount)
+			t.Errorf("Backend %s returned invalid key count for empty db: %d", kvmap.MapName(), keyCount)
 		}
 	} else {
 		keyCount := kvmap.GetKeyCount()
 		if keyCount != -1 {
-			t.Errorf("Backend %s returned invalid key count for empty db: %d", backendName, keyCount)
+			t.Errorf("Backend %s returned invalid key count for empty db: %d", kvmap.MapName(), keyCount)
 		}
 	}
 	testValue := []byte("testvalue")
 	kvmap.SetKey("testKey", testValue)
 	returnedValue, found := kvmap.GetKey("testKey")
 	if !found {
-		t.Errorf("Backend %s returned found!=true for existing key", backendName)
+		t.Errorf("Backend %s returned found!=true for existing key", kvmap.MapName())
 	}
 	if bytes.Compare(returnedValue, testValue) != 0 {
-		t.Errorf("Backend %s returned %s, expected %s", backendName, returnedValue, testValue)
+		t.Errorf("Backend %s returned %s, expected %s", kvmap.MapName(), returnedValue, testValue)
 	}
 	_, found = kvmap.GetKey("invalidkey")
 	if found {
-		t.Errorf("Backend %s returned found=true for invalid key", backendName)
+		t.Errorf("Backend %s returned found=true for invalid key", kvmap.MapName())
 	}
-	if backendName != "sync" {
+	if kvmap.MapName() != Sync {
 		keyCount := kvmap.GetKeyCount()
 		if keyCount != 1 {
-			t.Errorf("Backend %s returned invalid key count for empty db: %d", backendName, keyCount)
+			t.Errorf("Backend %s returned invalid key count for empty db: %d", kvmap.MapName(), keyCount)
 		}
 	} else {
 		keyCount := kvmap.GetKeyCount()
 		if keyCount != -1 {
-			t.Errorf("Backend %s returned invalid key count for empty db: %d", backendName, keyCount)
+			t.Errorf("Backend %s returned invalid key count for empty db: %d", kvmap.MapName(), keyCount)
 		}
 	}
 	testValue1 := []byte("testvalue1")
 	kvmap.SetKey("testkey1", testValue1)
 	returnedValue, found = kvmap.GetKey("testkey1")
 	if !found {
-		t.Errorf("Backend %s returned found!=true for existing key", backendName)
+		t.Errorf("Backend %s returned found!=true for existing key", kvmap.MapName())
 	}
 	if bytes.Compare(returnedValue, testValue1) != 0 {
-		t.Errorf("Backend %s returned %s, expected %s", backendName, returnedValue, testValue1)
+		t.Errorf("Backend %s returned %s, expected %s", kvmap.MapName(), returnedValue, testValue1)
 	}
 	returnedValue, found = kvmap.GetKey("testKey")
 	if !found {
-		t.Errorf("Backend %s returned found!=true for original key after adding a new one", backendName)
+		t.Errorf("Backend %s returned found!=true for original key after adding a new one", kvmap.MapName())
 	}
 	if bytes.Compare(returnedValue, testValue) != 0 {
-		t.Errorf("Backend %s returned %s for the original key after another key was added, expected %s", backendName, returnedValue, testValue)
+		t.Errorf("Backend %s returned %s for the original key after another key was added, expected %s", kvmap.MapName(), returnedValue, testValue)
 	}
 	newTestValue := []byte("testvalue2")
 	kvmap.SetKey("testKey", newTestValue)
 	returnedValue, found = kvmap.GetKey("testKey")
 	if !found {
-		t.Errorf("Backend %s returned found!=true for original key after modifying", backendName)
+		t.Errorf("Backend %s returned found!=true for original key after modifying", kvmap.MapName())
 	}
 	if bytes.Compare(returnedValue, newTestValue) != 0 {
-		t.Errorf("Backend %s returned %s for the original key after another key was added, expected %s", backendName, returnedValue, newTestValue)
+		t.Errorf("Backend %s returned %s for the original key after another key was added, expected %s", kvmap.MapName(), returnedValue, newTestValue)
 	}
 }
 
-func testItems(kvmap KVMap, backendName string, t *testing.T) {
-	kvmap.Init()
+func testItems(kvmap KVMap, t *testing.T) {
 	kvmap.SetKey("testkey1", []byte("testvalue1"))
 	kvmap.SetKey("testkey2", []byte("testvalue2"))
 	incomingChannel := make(chan KVPair)
@@ -93,26 +91,24 @@ func testItems(kvmap KVMap, backendName string, t *testing.T) {
 	wg.Wait()
 }
 
-func testDelete(kvmap KVMap, backendName string, t *testing.T) {
-	kvmap.Init()
+func testDelete(kvmap KVMap, t *testing.T) {
 	var returnedValue []byte
 	var found bool
 	newTestValue := []byte("testvalue2")
 	kvmap.SetKey("testKey", newTestValue)
 	_, found = kvmap.GetKey("testKey")
 	if !found {
-		t.Errorf("kvmap %s init failed: setting key had no effect", backendName)
+		t.Errorf("kvmap %s init failed: setting key had no effect", kvmap.MapName())
 	}
 	kvmap.DeleteKey("testKey")
 	returnedValue, found = kvmap.GetKey("testKey")
 	if found {
-		t.Errorf("Delete %s did not delete key: value is %s", backendName, returnedValue)
+		t.Errorf("Delete %s did not delete key: value is %s", kvmap.MapName(), returnedValue)
 	}
 	kvmap.DeleteKey("testkey")
 }
 
 func benchmarkMap(b *testing.B, kvmap KVMap) {
-	kvmap.Init()
 	b.ResetTimer()
 	value := []byte("my test value")
 	wg := &sync.WaitGroup{}
@@ -133,139 +129,137 @@ func benchmarkMap(b *testing.B, kvmap KVMap) {
 }
 
 func BenchmarkBasicKvMap(b *testing.B) {
-	kvmap := &BasicKvMap{}
+	kvmap := GetBackend(Basic)
 	benchmarkMap(b, kvmap)
 }
 
 func BenchmarkSyncKvMap(b *testing.B) {
-	kvmap := &SyncKvMap{}
+	kvmap := GetBackend(Sync)
 	benchmarkMap(b, kvmap)
 }
 
 func BenchmarkShardedKvMap(b *testing.B) {
-	kvmap := &ShardedKvMap{}
+	kvmap := GetBackend(Sharded)
 	benchmarkMap(b, kvmap)
 }
 
 func TestBasicKvMap(t *testing.T) {
-	kvmap := &BasicKvMap{}
-	testBackend(kvmap, "basic", t)
+	kvmap := GetBackend(Basic)
+	testBackend(kvmap, t)
 }
 
 func TestSyncKvMap(t *testing.T) {
-	kvmap := &SyncKvMap{}
-	testBackend(kvmap, "sync", t)
+	kvmap := GetBackend(Sync)
+	testBackend(kvmap, t)
 }
 
 func TestRaceKvMap(t *testing.T) {
-	kvmap := &RaceKvMap{}
-	testBackend(kvmap, "race", t)
+	kvmap := GetBackend(Race)
+	testBackend(kvmap, t)
 }
 
 func TestShardedKvMap(t *testing.T) {
-	kvmap := &ShardedKvMap{}
-	testBackend(kvmap, "sharded", t)
+	kvmap := GetBackend(Sharded)
+	testBackend(kvmap, t)
 }
 
 func TestBasicKvMapItems(t *testing.T) {
-	kvmap := &BasicKvMap{}
-	testItems(kvmap, "basic", t)
+	kvmap := GetBackend(Basic)
+	testItems(kvmap, t)
 }
 
 func TestSyncKvMapItems(t *testing.T) {
-	kvmap := &SyncKvMap{}
-	testItems(kvmap, "sync", t)
+	kvmap := GetBackend(Sync)
+	testItems(kvmap, t)
 }
 
 func TestRaceKvMapItems(t *testing.T) {
-	kvmap := &RaceKvMap{}
-	testItems(kvmap, "race", t)
+	kvmap := GetBackend(Race)
+	testItems(kvmap, t)
 }
 
 func TestShardedKvMapItems(t *testing.T) {
-	kvmap := &ShardedKvMap{}
-	testItems(kvmap, "sharded", t)
+	kvmap := GetBackend(Sharded)
+	testItems(kvmap, t)
 }
 
 func TestBasicKvMapDelete(t *testing.T) {
-	kvmap := &BasicKvMap{}
-	testDelete(kvmap, "basic", t)
+	kvmap := GetBackend(Basic)
+	testDelete(kvmap, t)
 }
 
 func TestSyncKvMapDelete(t *testing.T) {
-	kvmap := &SyncKvMap{}
-	testDelete(kvmap, "sync", t)
+	kvmap := GetBackend(Sync)
+	testDelete(kvmap, t)
 }
 
 func TestRaceKvMapDelete(t *testing.T) {
-	kvmap := &RaceKvMap{}
-	testDelete(kvmap, "race", t)
+	kvmap := GetBackend(Race)
+	testDelete(kvmap, t)
 }
 
 func TestShardedKvMapDelete(t *testing.T) {
-	kvmap := &ShardedKvMap{}
-	testDelete(kvmap, "sharded", t)
+	kvmap := GetBackend(Sharded)
+	testDelete(kvmap, t)
 }
 
 func TestFileStorageBackend(t *testing.T) {
-	kvmap := &FileBackedStorage{}
 	hasher := sha256.New()
 	hasher.Write([]byte(string(time.Now().String())))
 	dataDirectory := fmt.Sprintf("%x", hasher.Sum(nil))
 	os.Setenv("DATA_DIRECTORY", dataDirectory)
 	defer os.RemoveAll(dataDirectory)
-	testBackend(kvmap, "filebacked", t)
-	kvmap2 := &CachedFileBackedStorage{}
-	kvmap2.Init()
-	keyCount := kvmap.GetKeyCount()
+	kvmap := GetBackend(FileBacked)
+	testBackend(kvmap, t)
+	kvmap2 := GetBackend(FileBacked)
+	keyCount := kvmap2.GetKeyCount()
 	if keyCount != 2 {
-		t.Error("A new file backed storage did not load old data")
+		t.Errorf("A new file backed storage did not load old data. Got %d", keyCount)
 	}
 }
 
 func TestCachedFileStorageBackend(t *testing.T) {
-	kvmap := &CachedFileBackedStorage{}
 	hasher := sha256.New()
 	hasher.Write([]byte(string(time.Now().String())))
 	dataDirectory := fmt.Sprintf("%x", hasher.Sum(nil))
 	os.Setenv("DATA_DIRECTORY", dataDirectory)
 	defer os.RemoveAll(dataDirectory)
-	testBackend(kvmap, "filebacked", t)
-	kvmap2 := &CachedFileBackedStorage{}
-	kvmap2.Init()
-	keyCount := kvmap.GetKeyCount()
+	kvmap := GetBackend(CachedFileBacked)
+	testBackend(kvmap, t)
+	time.Sleep(100 * time.Millisecond)
+	kvmap2 := GetBackend(CachedFileBacked)
+	keyCount := kvmap2.GetKeyCount()
 	if keyCount != 2 {
-		t.Error("A new file backed storage did not load old data")
+		t.Errorf("A new cached file backed storage did not load old data. Got %d", keyCount)
 	}
 }
 
 func TestFileStorageBackendDelete(t *testing.T) {
-	kvmap := &FileBackedStorage{}
+	kvmap := GetBackend(FileBacked)
 	hasher := sha256.New()
 	hasher.Write([]byte(string(time.Now().String())))
 	dataDirectory := fmt.Sprintf("%x", hasher.Sum(nil))
 	os.Setenv("DATA_DIRECTORY", dataDirectory)
 	defer os.RemoveAll(dataDirectory)
-	testDelete(kvmap, "filebacked", t)
-	kvmap2 := &CachedFileBackedStorage{}
-	kvmap2.Init()
-	keyCount := kvmap.GetKeyCount()
+	testDelete(kvmap, t)
+	kvmap2 := GetBackend(CachedFileBacked)
+	keyCount := kvmap2.GetKeyCount()
 	if keyCount != 0 {
 		t.Error("A new file backed storage did load deleted data")
 	}
 }
 
 func TestCachedFileStorageBackendDelete(t *testing.T) {
-	kvmap := &CachedFileBackedStorage{}
 	hasher := sha256.New()
 	hasher.Write([]byte(string(time.Now().String())))
 	dataDirectory := fmt.Sprintf("%x", hasher.Sum(nil))
 	os.Setenv("DATA_DIRECTORY", dataDirectory)
 	defer os.RemoveAll(dataDirectory)
-	testDelete(kvmap, "filebacked", t)
-	kvmap2 := &CachedFileBackedStorage{}
-	kvmap2.Init()
-	keyCount := kvmap.GetKeyCount()
+	kvmap := GetBackend(CachedFileBacked)
+	testDelete(kvmap, t)
+	time.Sleep(100 * time.Millisecond)
+	kvmap2 := GetBackend(CachedFileBacked)
+	keyCount := kvmap2.GetKeyCount()
 	if keyCount != 0 {
 		t.Error("A new file backed storage did not load deleted data")
 	}
@@ -290,8 +284,8 @@ func TestFileBackedStorageGetKeyCount(t *testing.T) {
 	hasher.Write([]byte(string(time.Now().String())))
 	dataDirectory := fmt.Sprintf("%x", hasher.Sum(nil))
 	os.Setenv("DATA_DIRECTORY", dataDirectory)
-	kvmap := &FileBackedStorage{}
-	kvmap.Init()
+	defer os.RemoveAll(dataDirectory)
+	kvmap := GetBackend(FileBacked)
 	err := os.RemoveAll(dataDirectory)
 	if err != nil {
 		t.Errorf("Removing data dir failed with %s", err)
@@ -308,8 +302,8 @@ func TestCachedFileBackedStorageGetKeyCount(t *testing.T) {
 	hasher.Write([]byte(string(time.Now().String())))
 	dataDirectory := fmt.Sprintf("%x", hasher.Sum(nil))
 	os.Setenv("DATA_DIRECTORY", dataDirectory)
-	kvmap := &CachedFileBackedStorage{}
-	kvmap.Init()
+	defer os.RemoveAll(dataDirectory)
+	kvmap := GetBackend(CachedFileBacked)
 	err := os.RemoveAll(dataDirectory)
 	if err != nil {
 		t.Errorf("Removing data dir failed with %s", err)

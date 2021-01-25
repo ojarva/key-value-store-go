@@ -17,8 +17,7 @@ import (
 )
 
 func getDummyDataContainer() dataContainer {
-	kvMap := &storage.BasicKvMap{}
-	kvMap.Init()
+	kvMap := storage.GetBackend(storage.Basic)
 	statsRequestChannel := make(chan chan []byte, 10)
 	statsResetChannel := make(chan bool, 10)
 	statsChannel := make(chan statsPoint, 100)
@@ -29,8 +28,8 @@ func getDummyDataContainer() dataContainer {
 		StatsRequestChannel: statsRequestChannel,
 		StatsResetChannel:   statsResetChannel,
 		StatsChannel:        statsChannel,
-		ChangesChannel:      make(chan Command, 100),
-		SubscriptionChannel: make(chan SubscriptionCommand, 100),
+		ChangesChannel:      make(chan command, 100),
+		SubscriptionChannel: make(chan subscriptionCommand, 100),
 		SenderIDGenerator:   generateSenderID(),
 		TimeoutSettings: timeoutSettings{
 			GeneralTimeout: timeout,
@@ -115,8 +114,7 @@ func TestKeyCountCommand(t *testing.T) {
 	if r.StatusCode != 200 {
 		t.Errorf("keycount returned incorrect status code %d", r.StatusCode)
 	}
-	dataContainer.KeyValueMap = &storage.SyncKvMap{}
-	dataContainer.KeyValueMap.Init()
+	dataContainer.KeyValueMap = storage.GetBackend(storage.Sync)
 	r = keyCountCommand(client, []byte(""), &dataContainer, connectionContainer)
 	if r.StatusCode != 501 {
 		t.Errorf("keycount returned incorrect status code %d", r.StatusCode)
@@ -238,7 +236,7 @@ func TestDeleteCommand(t *testing.T) {
 		if a.Command != "delete" {
 			t.Error("Delete command did not publish delete change")
 		}
-		if a.Key != "asdf" {
+		if a.Data.Key != "asdf" {
 			t.Error("delete command published incorrect key")
 		}
 	default:
@@ -265,10 +263,10 @@ func TestSetCommand(t *testing.T) {
 		if a.Command != "set" {
 			t.Error("set command did not publish set change")
 		}
-		if a.Key != "asdf" {
+		if a.Data.Key != "asdf" {
 			t.Error("set command published incorrect key")
 		}
-		if bytes.Compare(a.Value, []byte("foo")) != 0 {
+		if bytes.Compare(a.Data.Value, []byte("foo")) != 0 {
 			t.Error("set command published incorrect value")
 		}
 	default:
@@ -351,19 +349,19 @@ func TestHandleQuit(t *testing.T) {
 }
 
 func TestSubscriptionService(t *testing.T) {
-	subscriptionChannel := make(chan SubscriptionCommand, 1)
-	changesChannel := make(chan Command, 1)
+	subscriptionChannel := make(chan subscriptionCommand, 1)
+	changesChannel := make(chan command, 1)
 	var outBuffer bytes.Buffer
 	go subscriptionService(subscriptionChannel, changesChannel, &outBuffer)
-	connectionChannel := make(chan Command, 1)
-	changesChannel <- Command{Command: "testCommand"}
+	connectionChannel := make(chan command, 1)
+	changesChannel <- command{Command: "testCommand"}
 	time.Sleep(100 * time.Millisecond)
-	subscriptionChannel <- SubscriptionCommand{
+	subscriptionChannel <- subscriptionCommand{
 		UnsubscribeSender:   false,
 		SenderID:            "myid",
 		SubscriptionChannel: connectionChannel}
 	time.Sleep(100 * time.Millisecond)
-	changesChannel <- Command{Command: "testCommand2"}
+	changesChannel <- command{Command: "testCommand2"}
 	select {
 	case cmd := <-connectionChannel:
 		if cmd.Command != "testCommand2" {
@@ -372,16 +370,16 @@ func TestSubscriptionService(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 		t.Error("No messages from subscription service to subscribed client")
 	}
-	subscriptionChannel <- SubscriptionCommand{
+	subscriptionChannel <- subscriptionCommand{
 		UnsubscribeSender:   false,
 		SenderID:            "myid",
 		SubscriptionChannel: connectionChannel}
-	subscriptionChannel <- SubscriptionCommand{
+	subscriptionChannel <- subscriptionCommand{
 		UnsubscribeSender:   true,
 		SenderID:            "myid",
 		SubscriptionChannel: connectionChannel}
 	time.Sleep(100 * time.Millisecond)
-	changesChannel <- Command{Command: "testCommand3"}
+	changesChannel <- command{Command: "testCommand3"}
 	select {
 	case cmd := <-connectionChannel:
 		t.Errorf("Message to unsubscribed client: %s", cmd)
@@ -390,20 +388,20 @@ func TestSubscriptionService(t *testing.T) {
 }
 
 func TestCommandFormat(t *testing.T) {
-	var command Command
+	var cmd command
 	var formattedCommand []byte
-	command = Command{Command: "mycommand"}
-	formattedCommand = command.Format()
+	cmd = command{Command: "mycommand"}
+	formattedCommand = cmd.format()
 	if bytes.Compare(formattedCommand, []byte("mycommand")) != 0 {
 		t.Errorf("Invalid format for command-only: %s", formattedCommand)
 	}
-	command.Key = "mykey"
-	formattedCommand = command.Format()
+	cmd.Data.Key = "mykey"
+	formattedCommand = cmd.format()
 	if bytes.Compare(formattedCommand, []byte("mycommand mykey")) != 0 {
 		t.Errorf("Invalid format for command+key: %s", formattedCommand)
 	}
-	command.Value = []byte("myvalue")
-	formattedCommand = command.Format()
+	cmd.Data.Value = []byte("myvalue")
+	formattedCommand = cmd.format()
 	if bytes.Compare(formattedCommand, []byte("mycommand mykey myvalue")) != 0 {
 		t.Errorf("Invalid format for command+key+value: %s", formattedCommand)
 	}
