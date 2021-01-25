@@ -56,7 +56,7 @@ func deleteCommand(c net.Conn, args []byte, dataContainer *dataContainer, connec
 	}
 	keyName := string(args)
 	dataContainer.KeyValueMap.DeleteKey(keyName)
-	dataContainer.ChangesChannel <- Command{Command: "delete", Data: storage.KVPair{Key: keyName}}
+	dataContainer.ChangesChannel <- command{Command: "delete", Data: storage.KVPair{Key: keyName}}
 	return response{StatusCode: 200, Text: []byte("Deleted")}
 }
 
@@ -68,7 +68,7 @@ func setCommand(c net.Conn, args []byte, dataContainer *dataContainer, connectio
 	keyName := string(args[0:firstSpace])
 	value := args[firstSpace+1:]
 	dataContainer.KeyValueMap.SetKey(keyName, value)
-	dataContainer.ChangesChannel <- Command{Command: "set", Data: storage.KVPair{Key: keyName, Value: value}}
+	dataContainer.ChangesChannel <- command{Command: "set", Data: storage.KVPair{Key: keyName, Value: value}}
 	return response{StatusCode: 201, Text: []byte("Created")}
 }
 
@@ -81,12 +81,12 @@ func resetCommand(c net.Conn, args []byte, dataContainer *dataContainer, connect
 }
 
 func subscribeCommand(c net.Conn, args []byte, dataContainer *dataContainer, connectionContainer *connectionContainer) response {
-	dataContainer.SubscriptionChannel <- SubscriptionCommand{UnsubscribeSender: false, SenderID: connectionContainer.SenderID, SubscriptionChannel: connectionContainer.SubscriptionChannel}
+	dataContainer.SubscriptionChannel <- subscriptionCommand{UnsubscribeSender: false, SenderID: connectionContainer.SenderID, SubscriptionChannel: connectionContainer.SubscriptionChannel}
 	return response{StatusCode: 200, Text: []byte("Subscribed")}
 }
 
 func unsubscribeCommand(c net.Conn, args []byte, dataContainer *dataContainer, connectionContainer *connectionContainer) response {
-	dataContainer.SubscriptionChannel <- SubscriptionCommand{UnsubscribeSender: true, SenderID: connectionContainer.SenderID}
+	dataContainer.SubscriptionChannel <- subscriptionCommand{UnsubscribeSender: true, SenderID: connectionContainer.SenderID}
 	return response{StatusCode: 200, Text: []byte("Unsubscribed")}
 }
 
@@ -130,12 +130,12 @@ type commandParams struct {
 	Help string
 }
 
-type Command struct {
+type command struct {
 	Command string
 	Data    storage.KVPair
 }
 
-func (c *Command) Format() []byte {
+func (c *command) format() []byte {
 	if len(c.Data.Key) > 0 {
 		if len(c.Data.Value) > 0 {
 			return []byte(fmt.Sprintf("%s %s %s", c.Command, c.Data.Key, c.Data.Value))
@@ -145,8 +145,8 @@ func (c *Command) Format() []byte {
 	return []byte(c.Command)
 }
 
-type SubscriptionCommand struct {
-	SubscriptionChannel chan Command
+type subscriptionCommand struct {
+	SubscriptionChannel chan command
 	UnsubscribeSender   bool
 	SenderID            string
 }
@@ -161,8 +161,8 @@ type dataContainer struct {
 	StatsRequestChannel chan chan []byte
 	StatsResetChannel   chan bool
 	StatsChannel        chan statsPoint
-	SubscriptionChannel chan SubscriptionCommand
-	ChangesChannel      chan Command
+	SubscriptionChannel chan subscriptionCommand
+	ChangesChannel      chan command
 	SenderIDGenerator   func() string
 	TimeoutSettings     timeoutSettings
 	QuitChannel         chan struct{}
@@ -170,7 +170,7 @@ type dataContainer struct {
 
 type connectionContainer struct {
 	SenderID            string
-	SubscriptionChannel chan Command
+	SubscriptionChannel chan command
 }
 
 func generateSenderID() func() string {
@@ -184,7 +184,7 @@ func generateSenderID() func() string {
 	}
 }
 
-func syncLogWriter(outputWriter io.Writer, outputWriterChannel chan Command) {
+func syncLogWriter(outputWriter io.Writer, outputWriterChannel chan command) {
 	for cmd := range outputWriterChannel {
 		outputWriter.Write([]byte(cmd.Command + " " + cmd.Data.Key + " "))
 		outputWriter.Write([]byte(cmd.Data.Value))
@@ -192,9 +192,9 @@ func syncLogWriter(outputWriter io.Writer, outputWriterChannel chan Command) {
 	}
 }
 
-func subscriptionService(subscriptionChannel chan SubscriptionCommand, changesChannel chan Command, outputWriter io.Writer) {
-	subscriptions := make(map[string]SubscriptionCommand)
-	outputWriterChannel := make(chan Command, 100)
+func subscriptionService(subscriptionChannel chan subscriptionCommand, changesChannel chan command, outputWriter io.Writer) {
+	subscriptions := make(map[string]subscriptionCommand)
+	outputWriterChannel := make(chan command, 100)
 	outputWriterEnabled := false
 	if outputWriter != nil {
 		go syncLogWriter(outputWriter, outputWriterChannel)
@@ -267,7 +267,7 @@ func readConnection(c net.Conn, incomingLineChan chan []byte) {
 func handleConnection(c net.Conn, dataContainer *dataContainer) {
 	connectionContainer := &connectionContainer{
 		SenderID:            dataContainer.SenderIDGenerator(),
-		SubscriptionChannel: make(chan Command, 100),
+		SubscriptionChannel: make(chan command, 100),
 	}
 	connectionOpenTime := time.Now()
 	customLogger.Printf("Serving %s", c.RemoteAddr())
@@ -290,7 +290,7 @@ func handleConnection(c net.Conn, dataContainer *dataContainer) {
 				r.FinalCommand()
 			}
 		case sm := <-connectionContainer.SubscriptionChannel:
-			sendLine(c, 200, sm.Format(), &dataContainer.TimeoutSettings.WriteTimeout)
+			sendLine(c, 200, sm.format(), &dataContainer.TimeoutSettings.WriteTimeout)
 		}
 	}
 }
@@ -411,8 +411,8 @@ func initialize(port int, ip string, mapName string, generalTimeout string, writ
 		StatsResetChannel:   statsResetChannel,
 		TimeoutSettings:     timeoutSettings,
 		StatsChannel:        statsChannel,
-		SubscriptionChannel: make(chan SubscriptionCommand, 100),
-		ChangesChannel:      make(chan Command, 100),
+		SubscriptionChannel: make(chan subscriptionCommand, 100),
+		ChangesChannel:      make(chan command, 100),
 		SenderIDGenerator:   generateSenderID(),
 		QuitChannel:         make(chan struct{}, 1),
 	}
