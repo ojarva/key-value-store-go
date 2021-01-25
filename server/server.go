@@ -361,17 +361,17 @@ func init() {
 func getKvMap(mapName string) (storage.KVMap, error) {
 	switch mapName {
 	case "basic":
-		return &storage.BasicKvMap{}, nil
+		return storage.GetBackend(storage.Basic), nil
 	case "sharded":
-		return &storage.ShardedKvMap{}, nil
+		return storage.GetBackend(storage.Sharded), nil
 	case "sync":
-		return &storage.SyncKvMap{}, nil
+		return storage.GetBackend(storage.Sync), nil
 	case "race":
-		return &storage.RaceKvMap{}, nil
+		return storage.GetBackend(storage.Race), nil
 	case "filebacked":
-		return &storage.FileBackedStorage{}, nil
+		return storage.GetBackend(storage.FileBacked), nil
 	case "cachefilebacked":
-		return &storage.CachedFileBackedStorage{}, nil
+		return storage.GetBackend(storage.CachedFileBacked), nil
 	default:
 		return nil, errors.New("Invalid map name")
 	}
@@ -395,7 +395,6 @@ func initialize(port int, ip string, mapName string, generalTimeout string, writ
 	if err != nil {
 		return nil, nil, err
 	}
-	kvMap.Init()
 	timeoutSettings := timeoutSettings{GeneralTimeout: generalTimeoutDuration, WriteTimeout: writeTimeoutDuration}
 	addr := net.TCPAddr{IP: parsedIP, Port: port}
 
@@ -467,8 +466,7 @@ func dumpSyncLogToFile(wg *sync.WaitGroup, outChannel chan storage.KVPair, outFi
 }
 
 func syncLogCompactor(inFile io.Reader, outFile io.Writer) {
-	keyMap := storage.BasicKvMap{}
-	keyMap.Init()
+	keyMap := storage.GetBackend(storage.Basic)
 	scanner := bufio.NewScanner(inFile)
 	for scanner.Scan() {
 		line := scanner.Text()

@@ -17,8 +17,7 @@ import (
 )
 
 func getDummyDataContainer() dataContainer {
-	kvMap := &storage.BasicKvMap{}
-	kvMap.Init()
+	kvMap := storage.GetBackend(storage.Basic)
 	statsRequestChannel := make(chan chan []byte, 10)
 	statsResetChannel := make(chan bool, 10)
 	statsChannel := make(chan statsPoint, 100)
@@ -115,8 +114,7 @@ func TestKeyCountCommand(t *testing.T) {
 	if r.StatusCode != 200 {
 		t.Errorf("keycount returned incorrect status code %d", r.StatusCode)
 	}
-	dataContainer.KeyValueMap = &storage.SyncKvMap{}
-	dataContainer.KeyValueMap.Init()
+	dataContainer.KeyValueMap = storage.GetBackend(storage.Sync)
 	r = keyCountCommand(client, []byte(""), &dataContainer, connectionContainer)
 	if r.StatusCode != 501 {
 		t.Errorf("keycount returned incorrect status code %d", r.StatusCode)
