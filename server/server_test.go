@@ -238,7 +238,7 @@ func TestDeleteCommand(t *testing.T) {
 		if a.Command != "delete" {
 			t.Error("Delete command did not publish delete change")
 		}
-		if a.Key != "asdf" {
+		if a.Data.Key != "asdf" {
 			t.Error("delete command published incorrect key")
 		}
 	default:
@@ -265,10 +265,10 @@ func TestSetCommand(t *testing.T) {
 		if a.Command != "set" {
 			t.Error("set command did not publish set change")
 		}
-		if a.Key != "asdf" {
+		if a.Data.Key != "asdf" {
 			t.Error("set command published incorrect key")
 		}
-		if bytes.Compare(a.Value, []byte("foo")) != 0 {
+		if bytes.Compare(a.Data.Value, []byte("foo")) != 0 {
 			t.Error("set command published incorrect value")
 		}
 	default:
@@ -397,12 +397,12 @@ func TestCommandFormat(t *testing.T) {
 	if bytes.Compare(formattedCommand, []byte("mycommand")) != 0 {
 		t.Errorf("Invalid format for command-only: %s", formattedCommand)
 	}
-	command.Key = "mykey"
+	command.Data.Key = "mykey"
 	formattedCommand = command.Format()
 	if bytes.Compare(formattedCommand, []byte("mycommand mykey")) != 0 {
 		t.Errorf("Invalid format for command+key: %s", formattedCommand)
 	}
-	command.Value = []byte("myvalue")
+	command.Data.Value = []byte("myvalue")
 	formattedCommand = command.Format()
 	if bytes.Compare(formattedCommand, []byte("mycommand mykey myvalue")) != 0 {
 		t.Errorf("Invalid format for command+key+value: %s", formattedCommand)

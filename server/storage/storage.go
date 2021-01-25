@@ -327,9 +327,8 @@ const (
 )
 
 type outFile struct {
-	Key    string
-	Value  []byte
-	Action FileSyncAction
+	Data   KVPair
+	Action fileSyncAction
 }
 
 // CachedFileBackedStorage keeps all the data in-memory but also asynchronously stores everything in files. When calling Init, all existing keys are loaded from the filesystem.
@@ -371,11 +370,11 @@ func (d *CachedFileBackedStorage) Init() {
 	go func() {
 		var of outFile
 		for of = range d.writeoutChannel {
-			filename := d.dataDirectory + "/" + of.Key
+			filename := d.dataDirectory + "/" + of.Data.Key
 			switch of.Action {
-			case SetAction:
-				ioutil.WriteFile(filename, of.Value, 0600)
-			case DeleteAction:
+			case setAction:
+				ioutil.WriteFile(filename, of.Data.Value, 0600)
+			case deleteAction:
 				os.Remove(filename)
 			}
 		}

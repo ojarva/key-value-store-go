@@ -56,7 +56,7 @@ func deleteCommand(c net.Conn, args []byte, dataContainer *dataContainer, connec
 	}
 	keyName := string(args)
 	dataContainer.KeyValueMap.DeleteKey(keyName)
-	dataContainer.ChangesChannel <- Command{Command: "delete", Key: keyName}
+	dataContainer.ChangesChannel <- Command{Command: "delete", Data: storage.KVPair{Key: keyName}}
 	return response{StatusCode: 200, Text: []byte("Deleted")}
 }
 
@@ -68,7 +68,7 @@ func setCommand(c net.Conn, args []byte, dataContainer *dataContainer, connectio
 	keyName := string(args[0:firstSpace])
 	value := args[firstSpace+1:]
 	dataContainer.KeyValueMap.SetKey(keyName, value)
-	dataContainer.ChangesChannel <- Command{Command: "set", Key: keyName, Value: value}
+	dataContainer.ChangesChannel <- Command{Command: "set", Data: storage.KVPair{Key: keyName, Value: value}}
 	return response{StatusCode: 201, Text: []byte("Created")}
 }
 
@@ -132,16 +132,15 @@ type commandParams struct {
 
 type Command struct {
 	Command string
-	Key     string
-	Value   []byte
+	Data    storage.KVPair
 }
 
 func (c *Command) Format() []byte {
-	if len(c.Key) > 0 {
-		if len(c.Value) > 0 {
-			return []byte(fmt.Sprintf("%s %s %s", c.Command, c.Key, c.Value))
+	if len(c.Data.Key) > 0 {
+		if len(c.Data.Value) > 0 {
+			return []byte(fmt.Sprintf("%s %s %s", c.Command, c.Data.Key, c.Data.Value))
 		}
-		return []byte(fmt.Sprintf("%s %s", c.Command, c.Key))
+		return []byte(fmt.Sprintf("%s %s", c.Command, c.Data.Key))
 	}
 	return []byte(c.Command)
 }
@@ -187,8 +186,8 @@ func generateSenderID() func() string {
 
 func syncLogWriter(outputWriter io.Writer, outputWriterChannel chan Command) {
 	for cmd := range outputWriterChannel {
-		outputWriter.Write([]byte(cmd.Command + " " + cmd.Key + " "))
-		outputWriter.Write([]byte(cmd.Value))
+		outputWriter.Write([]byte(cmd.Command + " " + cmd.Data.Key + " "))
+		outputWriter.Write([]byte(cmd.Data.Value))
 		outputWriter.Write([]byte("\n"))
 	}
 }
