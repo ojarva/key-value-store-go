@@ -208,7 +208,7 @@ func TestFileStorageBackend(t *testing.T) {
 	hasher.Write([]byte(string(time.Now().String())))
 	dataDirectory := fmt.Sprintf("%x", hasher.Sum(nil))
 	os.Setenv("DATA_DIRECTORY", dataDirectory)
-	defer os.RemoveAll(dataDirectory)
+	defer os.Remove(dataDirectory)
 	kvmap := GetBackend(FileBacked)
 	testBackend(kvmap, t)
 	kvmap2 := GetBackend(FileBacked)
@@ -223,7 +223,7 @@ func TestCachedFileStorageBackend(t *testing.T) {
 	hasher.Write([]byte(string(time.Now().String())))
 	dataDirectory := fmt.Sprintf("%x", hasher.Sum(nil))
 	os.Setenv("DATA_DIRECTORY", dataDirectory)
-	defer os.RemoveAll(dataDirectory)
+	defer os.Remove(dataDirectory)
 	kvmap := GetBackend(CachedFileBacked)
 	testBackend(kvmap, t)
 	time.Sleep(100 * time.Millisecond)
@@ -240,7 +240,7 @@ func TestFileStorageBackendDelete(t *testing.T) {
 	hasher.Write([]byte(string(time.Now().String())))
 	dataDirectory := fmt.Sprintf("%x", hasher.Sum(nil))
 	os.Setenv("DATA_DIRECTORY", dataDirectory)
-	defer os.RemoveAll(dataDirectory)
+	defer os.Remove(dataDirectory)
 	testDelete(kvmap, t)
 	kvmap2 := GetBackend(CachedFileBacked)
 	keyCount := kvmap2.GetKeyCount()
@@ -254,7 +254,7 @@ func TestCachedFileStorageBackendDelete(t *testing.T) {
 	hasher.Write([]byte(string(time.Now().String())))
 	dataDirectory := fmt.Sprintf("%x", hasher.Sum(nil))
 	os.Setenv("DATA_DIRECTORY", dataDirectory)
-	defer os.RemoveAll(dataDirectory)
+	defer os.Remove(dataDirectory)
 	kvmap := GetBackend(CachedFileBacked)
 	testDelete(kvmap, t)
 	time.Sleep(100 * time.Millisecond)
@@ -284,9 +284,9 @@ func TestFileBackedStorageGetKeyCount(t *testing.T) {
 	hasher.Write([]byte(string(time.Now().String())))
 	dataDirectory := fmt.Sprintf("%x", hasher.Sum(nil))
 	os.Setenv("DATA_DIRECTORY", dataDirectory)
-	defer os.RemoveAll(dataDirectory)
+	defer os.Remove(dataDirectory)
 	kvmap := GetBackend(FileBacked)
-	err := os.RemoveAll(dataDirectory)
+	err := os.Remove(dataDirectory)
 	if err != nil {
 		t.Errorf("Removing data dir failed with %s", err)
 	}
@@ -302,9 +302,9 @@ func TestCachedFileBackedStorageGetKeyCount(t *testing.T) {
 	hasher.Write([]byte(string(time.Now().String())))
 	dataDirectory := fmt.Sprintf("%x", hasher.Sum(nil))
 	os.Setenv("DATA_DIRECTORY", dataDirectory)
-	defer os.RemoveAll(dataDirectory)
+	defer os.Remove(dataDirectory)
 	kvmap := GetBackend(CachedFileBacked)
-	err := os.RemoveAll(dataDirectory)
+	err := os.Remove(dataDirectory)
 	if err != nil {
 		t.Errorf("Removing data dir failed with %s", err)
 	}
@@ -312,4 +312,18 @@ func TestCachedFileBackedStorageGetKeyCount(t *testing.T) {
 	if keyCount != 0 {
 		t.Error("keycount did not fail with 0")
 	}
+}
+
+func ExampleGetBackend() {
+	kvmap := GetBackend(Basic)
+	fmt.Println(kvmap.MapName())
+	kvmap.SetKey("mykey", []byte("hello_world"))
+	value, found := kvmap.GetKey("mykey")
+	fmt.Println(string(value), found)
+	kvmap.DeleteKey("mykey")
+	_, foundAfterDelete := kvmap.GetKey("mykey")
+	fmt.Println(foundAfterDelete)
+	// Output: Basic
+	// hello_world true
+	// false
 }

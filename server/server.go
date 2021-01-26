@@ -23,9 +23,7 @@ var customLogger *log.Logger
 
 func sendLine(c net.Conn, statusCode int, line []byte, writeTimeout *time.Duration) {
 	c.SetDeadline(time.Now().Add(*writeTimeout))
-	c.Write([]byte(fmt.Sprintf("%d ", statusCode)))
-	c.Write(line)
-	c.Write([]byte("\n"))
+	fmt.Fprintf(c, "%d %s\n", statusCode, line)
 }
 
 type timeoutSettings struct {
@@ -456,16 +454,14 @@ func run(dataContainer *dataContainer, addr *net.TCPAddr, outputWriter io.Writer
 }
 
 func dumpSyncLogToFile(wg *sync.WaitGroup, outChannel chan storage.KVPair, outFile io.Writer) {
-	wg.Add(1)
 	for kv := range outChannel {
-		outFile.Write([]byte("set " + kv.Key + " "))
-		outFile.Write(kv.Value)
-		outFile.Write([]byte("\n"))
+		fmt.Fprintf(outFile, "set %s %s\n", kv.Key, kv.Value)
 	}
 	wg.Done()
 }
 
-func syncLogCompactor(inFile io.Reader, outFile io.Writer) {
+// SyncLogCompactor reads sync log and removes all duplicate entries. Replaying compacted log results in exactly the same data as non-compacted log.
+func SyncLogCompactor(inFile io.Reader, outFile io.Writer) {
 	keyMap := storage.GetBackend(storage.Basic)
 	scanner := bufio.NewScanner(inFile)
 	for scanner.Scan() {
@@ -481,6 +477,7 @@ func syncLogCompactor(inFile io.Reader, outFile io.Writer) {
 
 	outChannel := make(chan storage.KVPair, 1000)
 	var wg sync.WaitGroup
+	wg.Add(1)
 	go dumpSyncLogToFile(&wg, outChannel, outFile)
 	keyMap.Items(outChannel)
 	wg.Wait()
@@ -525,7 +522,7 @@ func main() {
 		if err != nil {
 			customLogger.Fatal(err)
 		}
-		syncLogCompactor(inFile, outFile)
+		SyncLogCompactor(inFile, outFile)
 	} else {
 		var outFile io.Writer
 		var err error

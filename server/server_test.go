@@ -407,11 +407,14 @@ func TestCommandFormat(t *testing.T) {
 	}
 }
 
-func TestSyncLogCompactor(t *testing.T) {
+func ExampleSyncLogCompactor() {
 	var inFile io.Reader
 	inFile = strings.NewReader("set mykey myvalue\nset mykey mynewvalue\ndelete nonexistingkey\nset anotherkey foo\ndelete anotherkey\nset thirdkey somevalue\n")
 	var outFile bytes.Buffer
-	syncLogCompactor(inFile, &outFile)
+	SyncLogCompactor(inFile, &outFile)
+	fmt.Println(outFile.String())
+	// Output: set mykey mynewvalue
+	// set thirdkey somevalue
 }
 
 func runHolder(addr *net.TCPAddr, dataContainer *dataContainer, wg *sync.WaitGroup, b *testing.B) {
