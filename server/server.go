@@ -454,7 +454,6 @@ func run(dataContainer *dataContainer, addr *net.TCPAddr, outputWriter io.Writer
 }
 
 func dumpSyncLogToFile(wg *sync.WaitGroup, outChannel chan storage.KVPair, outFile io.Writer) {
-	wg.Add(1)
 	for kv := range outChannel {
 		fmt.Fprintf(outFile, "set %s %s\n", kv.Key, kv.Value)
 	}
@@ -477,6 +476,7 @@ func syncLogCompactor(inFile io.Reader, outFile io.Writer) {
 
 	outChannel := make(chan storage.KVPair, 1000)
 	var wg sync.WaitGroup
+	wg.Add(1)
 	go dumpSyncLogToFile(&wg, outChannel, outFile)
 	keyMap.Items(outChannel)
 	wg.Wait()
