@@ -23,9 +23,7 @@ var customLogger *log.Logger
 
 func sendLine(c net.Conn, statusCode int, line []byte, writeTimeout *time.Duration) {
 	c.SetDeadline(time.Now().Add(*writeTimeout))
-	c.Write([]byte(fmt.Sprintf("%d ", statusCode)))
-	c.Write(line)
-	c.Write([]byte("\n"))
+	fmt.Fprintf(c, "%d %s\n", statusCode, line)
 }
 
 type timeoutSettings struct {
@@ -458,9 +456,7 @@ func run(dataContainer *dataContainer, addr *net.TCPAddr, outputWriter io.Writer
 func dumpSyncLogToFile(wg *sync.WaitGroup, outChannel chan storage.KVPair, outFile io.Writer) {
 	wg.Add(1)
 	for kv := range outChannel {
-		outFile.Write([]byte("set " + kv.Key + " "))
-		outFile.Write(kv.Value)
-		outFile.Write([]byte("\n"))
+		fmt.Fprintf(outFile, "set %s %s\n", kv.Key, kv.Value)
 	}
 	wg.Done()
 }
