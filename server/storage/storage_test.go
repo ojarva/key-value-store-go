@@ -313,3 +313,17 @@ func TestCachedFileBackedStorageGetKeyCount(t *testing.T) {
 		t.Error("keycount did not fail with 0")
 	}
 }
+
+func ExampleGetBackend() {
+	kvmap := GetBackend(Basic)
+	fmt.Println(kvmap.MapName())
+	kvmap.SetKey("mykey", []byte("hello_world"))
+	value, found := kvmap.GetKey("mykey")
+	fmt.Println(string(value), found)
+	kvmap.DeleteKey("mykey")
+	_, foundAfterDelete := kvmap.GetKey("mykey")
+	fmt.Println(foundAfterDelete)
+	// Output: Basic
+	// hello_world true
+	// false
+}
