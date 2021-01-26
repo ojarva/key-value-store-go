@@ -460,7 +460,8 @@ func dumpSyncLogToFile(wg *sync.WaitGroup, outChannel chan storage.KVPair, outFi
 	wg.Done()
 }
 
-func syncLogCompactor(inFile io.Reader, outFile io.Writer) {
+// SyncLogCompactor reads sync log and removes all duplicate entries. Replaying compacted log results in exactly the same data as non-compacted log.
+func SyncLogCompactor(inFile io.Reader, outFile io.Writer) {
 	keyMap := storage.GetBackend(storage.Basic)
 	scanner := bufio.NewScanner(inFile)
 	for scanner.Scan() {
@@ -521,7 +522,7 @@ func main() {
 		if err != nil {
 			customLogger.Fatal(err)
 		}
-		syncLogCompactor(inFile, outFile)
+		SyncLogCompactor(inFile, outFile)
 	} else {
 		var outFile io.Writer
 		var err error
